@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,17 @@ EXIT_ENV = 6
 EXIT_PROBE_FAIL = 7
 
 BUILD_TIMEOUT_S = 300
+
+
+def _foreign_missing_tool(output: str) -> str | None:
+    """Locale-independent detection of 'tool not on PATH' failures: cmd.exe
+    errors quote the tool name ('cube-cmake' ...), regardless of language."""
+    for name in re.findall(r"'([^'\r\n]{2,64})'", output):
+        if " " in name or "/" in name or "\\" in name:
+            continue
+        if not shutil.which(name, path=augmented_env().get("PATH", "")):
+            return name
+    return None
 
 
 def _colors_enabled() -> bool:
@@ -150,9 +162,22 @@ def _build(board: Board) -> int:
     code, out = _run(board.build_command, board.firmware_dir)
     elapsed = time.monotonic() - t0
     if code != 0:
-        print(_red(f"[build] FAILED (exit {code})"))
-        print(out[-2000:])
-        return EXIT_BUILD
+        # A foreign configure (e.g. the VSCode STM32 extension records its own
+        # tool names like 'cube-cmake' into build.ninja) breaks builds outside
+        # that environment. Self-heal: reconfigure with our cmake, rebuild.
+        foreign = _foreign_missing_tool(out)
+        if foreign and board.configure_command:
+            print(_yellow(f"[build] {foreign!r} (recorded by a foreign configure) "
+                          "not on PATH — reconfiguring with ST-bundle cmake"))
+            ccode, _ = _run(board.configure_command, board.firmware_dir)
+            if ccode == 0:
+                t0 = time.monotonic()
+                code, out = _run(board.build_command, board.firmware_dir)
+                elapsed = time.monotonic() - t0
+        if code != 0:
+            print(_red(f"[build] FAILED (exit {code})"))
+            print(out[-2000:])
+            return EXIT_BUILD
     warnings = [ln for ln in out.splitlines() if "warning:" in ln]
     tail = [ln for ln in out.splitlines() if ln.startswith(("[", "Memory region", "FLASH", "text"))][-4:]
     for ln in tail:
