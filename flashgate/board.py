@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from .gatestate import DEFAULT_WATCH
+
 
 class BoardError(Exception):
     pass
@@ -32,6 +34,7 @@ class Board:
     banner_regex: str
     banner_timeout_s: float
     error_patterns: tuple[str, ...]
+    watch_globs: tuple[str, ...]
     yaml_path: Path
 
     def head_sha(self) -> str | None:
@@ -86,6 +89,7 @@ def load_board(yaml_path: Path) -> Board:
             banner_regex=ser["banner_regex"],
             banner_timeout_s=float(ser.get("banner_timeout_s", 15)),
             error_patterns=tuple(ser.get("error_patterns", [])),
+            watch_globs=tuple((raw.get("gate") or {}).get("watch", DEFAULT_WATCH)),
             yaml_path=yaml_path,
         )
     except KeyError as exc:

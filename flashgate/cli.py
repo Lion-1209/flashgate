@@ -155,7 +155,8 @@ def _console_port(board: Board) -> tuple[str | None, str]:
 
 
 def _run_probes(board: Board, names: list[str] | None, conn) -> int:
-    """Run named probes (or all) on an open console connection."""
+    """Run named probes (or all) on an open console connection. The string
+    'all' selects every defined probe (used by --all-probes / the Stop hook)."""
     try:
         available = probe_mod.load_probes(board.yaml_path)
     except (OSError, yaml.YAMLError, probe_mod.ProbeError) as exc:
@@ -183,8 +184,9 @@ def _run_probes(board: Board, names: list[str] | None, conn) -> int:
 
 
 def cmd_verify(board: Board, probe_names: list[str] | None) -> int:
-    print(_cyan(f"[verify] {board.name}: build -> flash -> boot banner"
-                + (" -> probes" if probe_names is not None else "")))
+    all_probes = probe_names == ["all"]
+    title = "[verify] {b}: build -> flash -> boot banner" + (" -> probes" if probe_names is not None else "")
+    print(_cyan(title.format(b=board.name)))
 
     port, why = _console_port(board)
     if port is None:
@@ -234,7 +236,7 @@ def cmd_verify(board: Board, probe_names: list[str] | None) -> int:
             return EXIT_SHA_MISMATCH
 
         if probe_names is not None:
-            return _run_probes(board, probe_names, conn)
+            return _run_probes(board, None if all_probes else probe_names, conn)
 
         print(_green(f"[verify] PASS — the board itself confirms the firmware booted "
                      f"(git={got})"))
@@ -289,6 +291,8 @@ def main(argv: list[str] | None = None) -> int:
     p_verify = sub.add_parser("verify", help="full loop: build -> flash -> banner -> sha")
     p_verify.add_argument("--probe", action="append", metavar="NAME",
                           help="run functional probes after banner (repeatable)")
+    p_verify.add_argument("--all-probes", action="store_true",
+                          help="run every probe defined in the board profile")
     p_probe = sub.add_parser("probe", help="run probes against running firmware")
     p_probe.add_argument("names", nargs="*", metavar="NAME",
                          help="probe names (default: all defined in the board profile)")
@@ -303,7 +307,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.cmd == "verify":
-            return cmd_verify(board, args.probe)
+            names: list[str] | None = args.probe
+            if args.all_probes:
+                names = ["all"]
+            return cmd_verify(board, names)
         if args.cmd == "probe":
             return cmd_probe(board, args.names or None)
         simple = {

@@ -48,6 +48,12 @@ probes:
       - send: "demo on"
         expect: '^OK demo on$'
 
-# Exit-code contract (what the M3 Stop hook will consume):
+# Exit-code contract (what the M3 Stop hook consumes):
 #   0 = verified  1 = build failed  2 = flash failed  3 = no banner (timeout)
 #   4 = boot error string seen      5 = git sha mismatch  6 = env/prereq error
+#   7 = functional probe failed
+
+# Stop-hook trigger: working-tree changes matching these globs require a
+# fresh hardware verify before the agent may claim done.
+gate:
+  watch: ["*.c", "*.h", "*.s", "*.ld", "*.ioc", "CMakeLists.txt", "*.cmake", "cmake/*"]

@@ -51,6 +51,41 @@ echo $?                     # consume the verdict
 | 4 | boot error string seen on serial |
 | 5 | banner sha ≠ repo HEAD |
 | 6 | environment error (no ST-Link / serial / tools) |
+| 7 | functional probe failed |
+
+## The Stop hook (M3): the gate becomes a law
+
+`hooks/flashgate_stop.py` is a Claude Code **Stop hook** (the contract is
+honored by any compatible harness, coderio included). When the agent tries
+to end its turn after touching watched firmware files (`.c/.h/.s/.ld/.ioc`,
+CMake — configurable via `gate.watch` in the board profile), the hook:
+
+1. Fingerprints the firmware tree (HEAD + full diff + untracked list)
+2. **Instantly allows the stop** if this exact tree state already passed a
+   hardware verify (0.7s cached path — flashing 25x a day stays cheap)
+3. Otherwise runs `flashgate verify --all-probes` on the real board
+4. **Blocks the stop (exit 2)** when verification fails, telling the agent
+   exactly what to run and what came back — the board's testimony, not a
+   prompt-rule opinion
+5. Escalation (coderio VerifyGate semantics): the same broken tree is
+   blocked at most twice, then released with a loud warning — the gate
+   never wedges your session and never silently gives up
+
+Install into your firmware project's `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "python /path/to/flashgate/hooks/flashgate_stop.py --board /path/to/boards/apollo-h743.yaml",
+        "timeout": 600
+      }]
+    }]
+  }
+}
+```
 
 ## Board profiles
 
@@ -62,11 +97,11 @@ LCD is hardware-mutually-exclusive with the console on this board, PA10 conflict
 
 ## Roadmap
 
-- **M1** (this release): build → flash → banner → sha loop ✔
-- **M2**: serial probe protocol (`led0?` → state + real CCR readback) for
-  claim-proportional functional verification
-- **M3**: Claude Code Stop hook — unverified `.c/.h` changes block "done"
-- **M4**: MCP server (serial stream + flash + board state for any agent)
+- **M1**: build → flash → banner → sha loop ✔
+- **M2**: serial probe protocol (`led0?` → state + real CCR readback) ✔
+- **M3**: Claude Code Stop hook — unverified firmware changes block "done" ✔
+- **M4**: MCP server (serial stream + flash + board state for any agent),
+  demo GIF, bilingual docs, submit to awesome-claude-skills
 
 ## License
 
