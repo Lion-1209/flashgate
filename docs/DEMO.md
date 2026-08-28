@@ -1,7 +1,18 @@
 # flashgate 演示手册（真板，约 3 分钟全程）
 
+## 路径要求（先读这个）
+
+| 命令 | 在哪运行 |
+|---|---|
+| `flashgate <子命令>` | 任意目录 |
+| `claude`（场景 5） | **必须** `E:\999-Git\GithubTrency`（Stop hook 在这里的 .claude\settings.json） |
+| 场景 4 / 6 的脚本 | `E:\999-Git\GithubTrency\flashgate`（或把命令里的相对路径换成绝对路径） |
+
+本手册的 git 还原命令全部用绝对路径，任何目录可执行。
+`echo "exit=$?"` 是 Git Bash 语法；cmd 用 `echo %errorlevel%`，PowerShell 用 `$LASTEXITCODE`。
+
 前置：板子上电、ST-Link 和串口 USB 都插好、**关掉串口助手**（COM 口独占）。
-每次破坏性演示后用 `git checkout -- <文件>` 还原。
+每次破坏性演示后用 git checkout 还原。
 
 录 GIF：Windows 推荐 ScreenToGif（免费），只录终端窗口，每场景 20–30 秒。
 
@@ -50,7 +61,7 @@ flashgate verify --all-probes ; echo "exit=$?"
 
 讲解词：*"这段代码编译通过、烧录成功——但板子 15 秒没说话。"*
 看点：`TIMEOUT: board never printed the FLASHGATE-BOOT banner`，`exit=3`。
-还原：`git -C ../apollo checkout -- Core/Src/main.c`
+还原：`git -C E:/999-Git/GithubTrency/apollo checkout -- Core/Src/main.c`
 
 ---
 
@@ -72,7 +83,7 @@ flashgate verify --all-probes ; echo "exit=$?"
 exit=7
 ```
 
-还原：`git -C ../apollo checkout -- App/Src/app_led.c`
+还原：`git -C E:/999-Git/GithubTrency/apollo checkout -- App/Src/app_led.c`
 
 ---
 
