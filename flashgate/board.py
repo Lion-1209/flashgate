@@ -35,14 +35,23 @@ class Board:
     yaml_path: Path
 
     def head_sha(self) -> str | None:
-        """Short git sha the banner should carry (build-time generated)."""
+        """Firmware identity the banner should carry: short HEAD sha plus
+        '-dirty' when the working tree differs from HEAD (same algorithm as
+        cmake/firmware_identity.cmake, so the comparison is meaningful)."""
         try:
-            out = subprocess.run(
+            sha = subprocess.run(
                 ["git", "rev-parse", "--short=7", "HEAD"],
-                cwd=self.firmware_dir, capture_output=True, text=True, timeout=15,
-                check=True,
-            )
-            return out.stdout.strip()
+                cwd=self.firmware_dir, capture_output=True, text=True,
+                timeout=15, check=True,
+            ).stdout.strip()
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.firmware_dir, capture_output=True, text=True,
+                timeout=15, check=True,
+            ).stdout.strip()
+            if status:
+                sha += "-dirty"
+            return sha
         except (subprocess.SubprocessError, OSError):
             return None
 

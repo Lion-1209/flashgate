@@ -15,10 +15,11 @@ import time
 from pathlib import Path
 
 import serial
+import yaml
 
 from . import __version__
 from .board import Board, BoardError, default_board_path, load_board
-from . import flasher, serialmon
+from . import flasher, probes as probe_mod, serialmon
 from .sttools import augmented_env, find_cubeprogrammer
 
 EXIT_OK = 0
@@ -28,6 +29,7 @@ EXIT_BANNER_TIMEOUT = 3
 EXIT_BOOT_ERROR = 4
 EXIT_SHA_MISMATCH = 5
 EXIT_ENV = 6
+EXIT_PROBE_FAIL = 7
 
 BUILD_TIMEOUT_S = 300
 
@@ -152,8 +154,37 @@ def _console_port(board: Board) -> tuple[str | None, str]:
     return serialmon.resolve_console_port(board.serial_port, board.usb_vid, board.usb_pids)
 
 
-def cmd_verify(board: Board) -> int:
-    print(_cyan(f"[verify] {board.name}: build -> flash -> boot banner"))
+def _run_probes(board: Board, names: list[str] | None, conn) -> int:
+    """Run named probes (or all) on an open console connection."""
+    try:
+        available = probe_mod.load_probes(board.yaml_path)
+    except (OSError, yaml.YAMLError, probe_mod.ProbeError) as exc:
+        print(_red(f"[probe] cannot load probes: {exc}"))
+        return EXIT_ENV
+    if not available:
+        print(_red(f"[probe] no probes defined in {board.yaml_path.name}"))
+        return EXIT_ENV
+
+    selected = list(available) if names is None else names
+    for name in selected:
+        if name not in available:
+            print(_red(f"[probe] unknown probe {name!r}; available: {list(available)}"))
+            return EXIT_ENV
+
+    for name in selected:
+        probe = available[name]
+        print(_cyan(f"[probe] {name}: {probe.description}"))
+        result = probe_mod.run_probe(conn, probe)
+        if not result.ok:
+            print(_red(f"[probe] FAIL — {result.detail}"))
+            return EXIT_PROBE_FAIL
+        print(_green(f"[probe] {name}: PASS ({len(probe.steps)} steps)"))
+    return EXIT_OK
+
+
+def cmd_verify(board: Board, probe_names: list[str] | None) -> int:
+    print(_cyan(f"[verify] {board.name}: build -> flash -> boot banner"
+                + (" -> probes" if probe_names is not None else "")))
 
     port, why = _console_port(board)
     if port is None:
@@ -180,33 +211,53 @@ def cmd_verify(board: Board) -> int:
         banner = serialmon.wait_on(
             conn, board.banner_regex, board.error_patterns, board.banner_timeout_s
         )
+
+        if banner.error_hit:
+            print(_red(f"[verify] BOOT ERROR: error pattern {banner.error_hit!r} in output"))
+            return EXIT_BOOT_ERROR
+        if not banner.matched:
+            print(_red("[verify] TIMEOUT: board never printed the FLASHGATE-BOOT banner"))
+            print("  last serial output:")
+            for ln in banner.transcript.splitlines()[-5:]:
+                print(f"    | {ln}")
+            return EXIT_BANNER_TIMEOUT
+
+        info = banner.groups or {}
+        print(_green(f"[verify] banner OK: board={info.get('board')} git={info.get('git')} "
+                     f"build={info.get('build')} rtos={info.get('rtos')}"))
+
+        expected = board.head_sha()
+        got = info.get("git")
+        if expected and got and expected != got:
+            print(_red(f"[verify] SHA MISMATCH: board runs {got}, repo HEAD is {expected} "
+                       "(rebuild after committing?)"))
+            return EXIT_SHA_MISMATCH
+
+        if probe_names is not None:
+            return _run_probes(board, probe_names, conn)
+
+        print(_green(f"[verify] PASS — the board itself confirms the firmware booted "
+                     f"(git={got})"))
+        return EXIT_OK
     finally:
         conn.close()
 
-    if banner.error_hit:
-        print(_red(f"[verify] BOOT ERROR: error pattern {banner.error_hit!r} in output"))
-        return EXIT_BOOT_ERROR
-    if not banner.matched:
-        print(_red("[verify] TIMEOUT: board never printed the FLASHGATE-BOOT banner"))
-        print("  last serial output:")
-        for ln in banner.transcript.splitlines()[-5:]:
-            print(f"    | {ln}")
-        return EXIT_BANNER_TIMEOUT
 
-    info = banner.groups or {}
-    print(_green(f"[verify] banner OK: board={info.get('board')} git={info.get('git')} "
-                 f"build={info.get('build')} rtos={info.get('rtos')}"))
-
-    expected = board.head_sha()
-    got = info.get("git")
-    if expected and got and expected != got:
-        print(_red(f"[verify] SHA MISMATCH: board runs {got}, repo HEAD is {expected} "
-                   "(rebuild after committing?)"))
-        return EXIT_SHA_MISMATCH
-
-    print(_green(f"[verify] PASS — the board itself confirms the firmware booted "
-                 f"(git={got})"))
-    return EXIT_OK
+def cmd_probe(board: Board, names: list[str] | None) -> int:
+    """Standalone probe run against already-running firmware (no build/flash)."""
+    port, why = _console_port(board)
+    if port is None:
+        print(_red(f"[probe] console serial port unresolved — {why}"))
+        return EXIT_ENV
+    try:
+        conn = serialmon.open_flush(port, board.baudrate)
+    except serial.SerialException as exc:
+        print(_red(f"[probe] cannot open {port}: {exc}"))
+        return EXIT_ENV
+    try:
+        return _run_probes(board, names, conn)
+    finally:
+        conn.close()
 
 
 def cmd_console(board: Board) -> int:
@@ -235,7 +286,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("doctor", help="check ST-Link, console serial, toolchain")
     sub.add_parser("build", help="build the firmware")
     sub.add_parser("flash", help="flash + verify + start via ST-Link")
-    sub.add_parser("verify", help="full loop: build -> flash -> boot banner -> sha check")
+    p_verify = sub.add_parser("verify", help="full loop: build -> flash -> banner -> sha")
+    p_verify.add_argument("--probe", action="append", metavar="NAME",
+                          help="run functional probes after banner (repeatable)")
+    p_probe = sub.add_parser("probe", help="run probes against running firmware")
+    p_probe.add_argument("names", nargs="*", metavar="NAME",
+                         help="probe names (default: all defined in the board profile)")
     sub.add_parser("console", help="live serial monitor")
 
     args = parser.parse_args(argv)
@@ -245,12 +301,16 @@ def main(argv: list[str] | None = None) -> int:
         print(_red(str(exc)))
         return EXIT_ENV
 
-    handlers = {
-        "doctor": cmd_doctor, "build": cmd_build,
-        "flash": cmd_flash, "verify": cmd_verify, "console": cmd_console,
-    }
     try:
-        return handlers[args.cmd](board)
+        if args.cmd == "verify":
+            return cmd_verify(board, args.probe)
+        if args.cmd == "probe":
+            return cmd_probe(board, args.names or None)
+        simple = {
+            "doctor": cmd_doctor, "build": cmd_build,
+            "flash": cmd_flash, "console": cmd_console,
+        }
+        return simple[args.cmd](board)
     except KeyboardInterrupt:
         print()
         return EXIT_ENV

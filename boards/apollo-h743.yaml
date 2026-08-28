@@ -27,6 +27,27 @@ serial:
   banner_timeout_s: 15
   error_patterns: ["HardFault", "Assertion", "assert_param"]
 
+# Functional probes (M2): claim-proportional verification over the console
+# protocol. led0 set + readback proves the state machine took the command;
+# ccr readback is the TIM3 hardware register, not a firmware opinion.
+probes:
+  led-demo:
+    description: LED state-machine set/readback + PWM CCR sanity
+    step_timeout_s: 3
+    steps:
+      - send: "led0 breath"
+        expect: '^OK led0 state=BREATH$'
+      - send: "led0?"
+        expect: '^OK led0 state=(?P<state>\S+) ccr=(?P<ccr>\d+)$'
+        assert: "state == BREATH and ccr <= 1000"
+      - send: "led1?"
+        expect: '^OK led1 state=(?P<state>\S+) ccr=(?P<ccr>\d+)$'
+        assert: "state == BREATH"
+      - send: "ping"
+        expect: '^OK pong git=(?P<git>\S+) build=(?P<build>\S+)$'
+      - send: "demo on"
+        expect: '^OK demo on$'
+
 # Exit-code contract (what the M3 Stop hook will consume):
 #   0 = verified  1 = build failed  2 = flash failed  3 = no banner (timeout)
 #   4 = boot error string seen      5 = git sha mismatch  6 = env/prereq error
