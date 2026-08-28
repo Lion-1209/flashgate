@@ -1,42 +1,58 @@
 # flashgate
 
-**中文说明见下方** | The agent can't claim the firmware works — until the board says so.
+**The agent can't claim the firmware works — until the board says so.**
+[中文说明](#中文说明) ↓
 
-flashgate is a hardware-in-the-loop verification gate for coding agents (Claude Code, Codex, coderio, …).
-It closes the loop that every coding agent is missing on firmware work:
+flashgate is a hardware-in-the-loop verification gate for coding agents
+(Claude Code, Codex, coderio, …). It closes the loop every coding agent is
+missing on firmware work:
 
 ```
 build → flash over ST-Link → board boots → banner over serial → exit code
 ```
 
-The firmware prints a boot banner carrying its **git sha + build time**:
+The firmware prints a boot banner carrying its **git sha + build time**
+(plus `-dirty` when the tree differs from HEAD, so the proof covers exactly
+what you're about to flash):
 
 ```
-FLASHGATE-BOOT board=apollo-h743 git=9508c78 build=2026-08-28T07:16:24Z rtos=FreeRTOS
+FLASHGATE-BOOT board=apollo-h743 git=2c58bd3 build=2026-08-28T07:26:35Z rtos=FreeRTOS
 ```
 
-`flashgate verify` proves the sha on the wire matches the repo HEAD. If the board
-didn't boot — dead loop, HardFault, wrong build — the exit code says so, and the
-upcoming Stop hook (M3) uses exactly that to block premature "done" claims.
+`flashgate verify` then drives the **actual feature** over the console and
+asserts on hardware register readbacks — and a Stop hook turns the verdict
+into law: unverified firmware changes block the agent's "done".
+
+## The three layers (all validated on real hardware)
+
+| Layer | Proof | Since |
+|---|---|---|
+| Boot gate | the board prints its identity; sha must match the tree | M1 |
+| Probe gate | send real commands, assert on TIM3 CCR register readback | M2 |
+| Stop hook | unverified `.c/.h` changes block the agent's "done" (exit 2) | M3 |
+| MCP server | any agent can flash/probe/read the board over the standard protocol | M4 |
 
 ## Install
 
 ```bash
-pip install -e .          # inside this repo; needs Python 3.11+
+pip install -e .                 # Python 3.11+
+pip install -e ".[mcp]"          # + MCP server (flashgate-mcp)
 ```
 
 Requires: STM32CubeProgrammer CLI (auto-discovered from STM32Cube bundles),
-CMake + Ninja + arm-none-eabi-gcc (bundles work), an ST-Link, and the board's
-USB-serial cable.
+CMake + Ninja + arm-none-eabi-gcc (bundles work), an ST-Link, and a
+USB-TTL adapter wired to the board's console UART.
 
 ## Usage
 
 ```bash
 flashgate doctor            # ST-Link / serial / toolchain sanity
 flashgate build             # firmware build only
-flashgate flash             # write + verify + start
-flashgate console           # live serial monitor
+flashgate flash             # write + verify + start (auto-retry on USB flakes)
 flashgate verify            # THE gate: build → flash → banner → sha
+flashgate verify --all-probes   # + functional probes (claim-proportional)
+flashgate probe [NAME...]   # probes against already-running firmware
+flashgate console           # live serial monitor
 echo $?                     # consume the verdict
 ```
 
@@ -44,7 +60,7 @@ echo $?                     # consume the verdict
 
 | code | meaning |
 |---|---|
-| 0 | verified — board booted the firmware built from HEAD |
+| 0 | verified — board booted the firmware built from this tree |
 | 1 | build failed |
 | 2 | flash failed |
 | 3 | no boot banner within timeout (dead loop? HardFault?) |
@@ -53,23 +69,35 @@ echo $?                     # consume the verdict
 | 6 | environment error (no ST-Link / serial / tools) |
 | 7 | functional probe failed |
 
-## The Stop hook (M3): the gate becomes a law
+## The Stop hook: the gate becomes a law
 
-`hooks/flashgate_stop.py` is a Claude Code **Stop hook** (the contract is
-honored by any compatible harness, coderio included). When the agent tries
-to end its turn after touching watched firmware files (`.c/.h/.s/.ld/.ioc`,
-CMake — configurable via `gate.watch` in the board profile), the hook:
+`hooks/flashgate_stop.py` is a Claude Code **Stop hook** (the contract works
+in any compatible harness, coderio included). When the agent tries to end
+its turn after touching watched firmware files (`gate.watch` in the board
+profile), the hook:
 
 1. Fingerprints the firmware tree (HEAD + full diff + untracked list)
-2. **Instantly allows the stop** if this exact tree state already passed a
-   hardware verify (0.7s cached path — flashing 25x a day stays cheap)
+2. **Instantly allows** if this exact tree state already passed hardware
+   verify (0.7 s cached path)
 3. Otherwise runs `flashgate verify --all-probes` on the real board
-4. **Blocks the stop (exit 2)** when verification fails, telling the agent
-   exactly what to run and what came back — the board's testimony, not a
-   prompt-rule opinion
+4. **Blocks (exit 2)** on failure, feeding the agent the board's testimony
+   and the exact command to run
 5. Escalation (coderio VerifyGate semantics): the same broken tree is
-   blocked at most twice, then released with a loud warning — the gate
-   never wedges your session and never silently gives up
+   blocked at most twice, then released with a loud warning — never wedges
+   your session, never silently gives up
+
+Real transcript, sabotaged firmware (`led_set_state` silently does nothing —
+compiles clean, board boots, only the readback catches it):
+
+```
+[flashgate] watched firmware changed (1 file(s)) — running hardware verify...
+[flashgate] BLOCKED (attempt 1/2): firmware changes are not verified on hardware (verify rc=7).
+[flashgate] Run `flashgate --board boards/apollo-h743.yaml verify --all-probes`,
+            fix the firmware until it exits 0, then finish.
+[flashgate] last verify output:
+    step 1: led-demo> led0 breath
+    board: OK led0 state=OFF          ← the readback exposes the silent no-op
+```
 
 Install into your firmware project's `.claude/settings.json`:
 
@@ -87,22 +115,97 @@ Install into your firmware project's `.claude/settings.json`:
 }
 ```
 
+## MCP server (M4)
+
+```json
+{ "mcpServers": { "flashgate": {
+    "command": "flashgate-mcp",
+    "args": ["--board", "/path/to/boards/apollo-h743.yaml"] } } }
+```
+
+Tools: `board_info`, `doctor`, `build`, `flash`, `verify`, `probe`,
+`console_send`, `console_read` — any MCP-capable agent can now flash the
+board, run probes, and read the console directly. Supports mcp 1.x and 2.x.
+
+```
+tools/call console_send {"line": "ping"}
+→ OK pong git=c65c453-dirty build=2026-08-28T08:06:26Z
+```
+
 ## Board profiles
 
-One yaml per board under `boards/`. Everything the gate needs is declarative —
-build command, artifact, flash address, USB VID/PID of the serial bridge, banner
-regex, timeout, error patterns. First profile: `boards/apollo-h743.yaml`
-(ALIENTEK Apollo STM32H743, console on USART1 via onboard CH340 — note the RGB
-LCD is hardware-mutually-exclusive with the console on this board, PA10 conflict).
+One yaml per board under `boards/`. Everything the gate needs is
+declarative — build command, artifact, flash address, console adapter
+hints, banner regex, probes, watch globs. First profile:
+`boards/apollo-h743.yaml` (ALIENTEK Apollo STM32H743 core board; console on
+the USART1 header via any USB-TTL adapter). Note: on this board the RGB LCD
+is hardware-mutually-exclusive with the console (LTDC_B1 shares PA10 with
+USART1_RX).
+
+The console-side adapter is a property of your bench, not the board: port
+resolution is explicit `serial.port` / env `FLASHGATE_SERIAL_PORT` >
+VID/PID hint > sole serial port, and the banner regex is the final identity
+proof regardless of which adapter answered.
 
 ## Roadmap
 
 - **M1**: build → flash → banner → sha loop ✔
 - **M2**: serial probe protocol (`led0?` → state + real CCR readback) ✔
-- **M3**: Claude Code Stop hook — unverified firmware changes block "done" ✔
-- **M4**: MCP server (serial stream + flash + board state for any agent),
-  demo GIF, bilingual docs, submit to awesome-claude-skills
+- **M3**: Claude Code Stop hook — unverified changes block "done" ✔
+- **M4**: MCP server ✔ · demo GIF ☐ · SWD-signature evidence channel
+  (no serial cable needed) ☐
 
 ## License
 
 MIT
+---
+
+# 中文说明
+
+**agent 不能说固件能跑——除非板子亲口说。**
+
+flashgate 是给 coding agent（Claude Code / Codex / coderio……）用的**硬件在环验证门**，补上所有 coding agent 在固件开发里都缺的那一环：编译通过不等于能用，agent 说"完成"不算完成，**板子自己说了才算**。
+
+## 工作原理
+
+```
+编译 → ST-Link 烧录 → 板子启动 → 串口打出身份横幅 → 退出码
+```
+
+- **启动门（M1）**：固件开机第一句通过串口喊出自己的 git sha 和构建时间（工作区有未提交改动会带 `-dirty` 后缀），工具核对"板上跑的确实是当前这份代码"
+- **探针门（M2）**：通过串口真刀真枪用功能——下发 `led0 breath`，再读回**定时器 CCR 硬件寄存器当前值**，断言状态与占空比。寄存器不会撒谎
+- **执法门（M3）**：Claude Code Stop hook——agent 改了 `.c/.h` 想结束会话？没过硬件验证就拦截（exit 2），把板子的证词喂回给 agent；同一棵坏树最多拦两次，之后放行但大声警告（coderio 四道门的逐级拦截语义，永不卡死会话、永不静默放水）
+- **MCP server（M4）**：任何支持 MCP 的 agent 都能直接烧录、探针、读串口
+
+## 安装与使用
+
+```bash
+pip install -e ".[mcp]"      # Python 3.11+，含 MCP server
+
+flashgate doctor             # 体检：ST-Link / 串口 / 工具链
+flashgate verify --all-probes  # 完整闭环：编译→烧录→横幅→sha→功能探针
+echo $?                      # 0 = 板子亲自证明能跑；非 0 = 不能跑，附原因
+```
+
+退出码契约：`0` 验证通过 / `1` 构建失败 / `2` 烧录失败 / `3` 无横幅（死循环？HardFault？）/ `4` 启动报错 / `5` sha 不一致 / `6` 环境问题 / `7` 探针失败。
+
+## 板卡档案
+
+一块板一个 yaml（`boards/apollo-h743.yaml`），构建命令、烧录地址、串口适配提示、横幅正则、探针、监控通配符全部声明式——换板子只换档案。串口转接模块（CH340/CP210x/FT232…）是工作台属性不是板子属性，端口解析支持显式指定 / 芯片提示匹配 / 唯一串口兜底三级。
+
+## 已验证的真实拦截案例
+
+`led_set_state` 被塞入静默 `return`——编译通过、板子正常启动、ping 都通（最阴险的一类 bug），探针第一步就抓住：
+
+```
+电脑 → "led0 breath"
+板子 → "OK led0 state=OFF"     ← 读回值（非回声）暴露设置未生效
+exit 7，Stop hook 拦截 agent 的"完成"声明
+```
+
+## 路线图
+
+M1 启动门 ✔ · M2 探针门 ✔ · M3 执法 Stop hook ✔ · M4 MCP server ✔ ·
+演示 GIF 与 SWD 签名副通道（免串口线验证）待做
+
+MIT License

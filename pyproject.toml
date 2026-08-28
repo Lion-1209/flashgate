@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flashgate"
-version = "0.1.0"
+version = "0.2.0"
 description = "Hardware-in-the-loop verification gate: your agent can't claim the firmware works until the board says so."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,8 +14,12 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[project.optional-dependencies]
+mcp = ["mcp>=1.2"]
+
 [project.scripts]
 flashgate = "flashgate.cli:main"
+flashgate-mcp = "flashgate.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["flashgate*"]
