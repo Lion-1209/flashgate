@@ -1,0 +1,28 @@
+# Board profile: ALIENTEK Apollo STM32H743IIT6
+# Onboard CH340 USB-serial is wired to USART1 PA9/PA10 (jumper caps must be on).
+# RGB LCD is hardware-mutually-exclusive with the console (LTDC_B1 shares PA10).
+board: apollo-h743
+mcu: STM32H743IIT6
+description: ALIENTEK Apollo dev board, console on USART1 via onboard CH340
+
+firmware:
+  dir: ../apollo                     # relative to this yaml file
+  configure: cmake --preset Debug    # run once when build/ is missing
+  build: ninja -C build/Debug
+  artifact: build/Debug/Apollo.bin
+
+flash:
+  connect: port=SWD                  # ST-Link
+  address: "0x08000000"
+
+serial:
+  vid: 0x1A86                        # QinHeng / WCH
+  pids: [0x7523, 0x5523]             # CH340 / CH341
+  baudrate: 115200
+  banner_regex: 'FLASHGATE-BOOT board=(?P<board>\S+) git=(?P<git>\S+) build=(?P<build>\S+) rtos=(?P<rtos>\S+)'
+  banner_timeout_s: 15
+  error_patterns: ["HardFault", "Assertion", "assert_param"]
+
+# Exit-code contract (what the M3 Stop hook will consume):
+#   0 = verified  1 = build failed  2 = flash failed  3 = no banner (timeout)
+#   4 = boot error string seen      5 = git sha mismatch  6 = env/prereq error
