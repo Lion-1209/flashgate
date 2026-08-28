@@ -8,6 +8,7 @@ Exit-code contract (the M3 Stop hook enforces these):
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -34,10 +35,38 @@ EXIT_PROBE_FAIL = 7
 BUILD_TIMEOUT_S = 300
 
 
-def _green(text: str) -> str:  return f"\033[32m{text}\033[0m"
-def _red(text: str) -> str:    return f"\033[31m{text}\033[0m"
-def _yellow(text: str) -> str: return f"\033[33m{text}\033[0m"
-def _cyan(text: str) -> str:   return f"\033[36m{text}\033[0m"
+def _colors_enabled() -> bool:
+    """Colors only when stdout is an interactive terminal that can render
+    ANSI — legacy PowerShell/conhost would print raw escape codes, and
+    piped/logged output shouldn't carry them either."""
+    if os.environ.get("NO_COLOR"):
+        return False
+    if not sys.stdout.isatty():
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.GetStdHandle(-11)          # STD_OUTPUT_HANDLE
+            mode = ctypes.c_uint32()
+            if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                return False
+            ENABLE_VT = 0x0004                            # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            if not (mode.value & ENABLE_VT):
+                kernel32.SetConsoleMode(handle, mode.value | ENABLE_VT)
+            return True
+        except OSError:
+            return False
+    return True
+
+
+_COLOR = _colors_enabled()
+
+
+def _green(text: str) -> str:  return f"\033[32m{text}\033[0m" if _COLOR else text
+def _red(text: str) -> str:    return f"\033[31m{text}\033[0m" if _COLOR else text
+def _yellow(text: str) -> str: return f"\033[33m{text}\033[0m" if _COLOR else text
+def _cyan(text: str) -> str:   return f"\033[36m{text}\033[0m" if _COLOR else text
 
 
 def _resolve_board(args: argparse.Namespace) -> Board:
