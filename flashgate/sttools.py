@@ -15,11 +15,18 @@ def _bundle_root() -> Path:
 
 
 def bundle_bin_dirs() -> list[Path]:
-    """All bundle bin dirs (cmake/ninja/gcc/programmer...), any version."""
+    """All bundle bin dirs (cmake/ninja/gcc/programmer...), newest version
+    of each tool first so PATH lookups win with the newest."""
     root = _bundle_root()
     if not root.is_dir():
         return []
-    return sorted(p for p in root.glob("*/*/bin") if p.is_dir())
+
+    def version_key(p: Path) -> tuple:
+        raw = p.parent.name  # the <version> directory
+        return tuple(int(x) if x.isdigit() else 0 for x in re.split(r"[+.-]", raw))
+
+    dirs = [p for p in root.glob("*/*/bin") if p.is_dir()]
+    return sorted(dirs, key=lambda p: (p.parts[-3], tuple(-x for x in version_key(p))))
 
 
 def augmented_env() -> dict[str, str]:

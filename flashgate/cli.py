@@ -68,9 +68,9 @@ def cmd_doctor(board: Board) -> int:
 
     if cli:
         listing = flasher.list_stlink()
-        probes = [ln for ln in listing.splitlines() if "ST-LINK" in ln.upper()]
-        if probes:
-            print(_green(f"  ST-Link    : {probes[0].strip()}"))
+        sn_lines = [ln.strip() for ln in listing.splitlines() if "ST-LINK SN" in ln]
+        if sn_lines:
+            print(_green(f"  ST-Link    : {sn_lines[0]}"))
         else:
             problems.append("no ST-Link probe detected (check USB, power, driver)")
             print(_red("  ST-Link    : none detected"))
