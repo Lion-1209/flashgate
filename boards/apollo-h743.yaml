@@ -1,9 +1,12 @@
-# Board profile: ALIENTEK Apollo STM32H743IIT6
-# Onboard CH340 USB-serial is wired to USART1 PA9/PA10 (jumper caps must be on).
-# RGB LCD is hardware-mutually-exclusive with the console (LTDC_B1 shares PA10).
+# Board profile: ALIENTEK Apollo STM32H743IIT6 (core board)
+# Console side is just USART1 TTL (PA9/PA10) on the core-board header — the
+# USB side is whatever USB-TTL adapter bridges it to the PC (CH340, CP210x,
+# FT232...). Port resolution: explicit `port` / env FLASHGATE_SERIAL_PORT >
+# VID/PID hint > sole serial port. The banner regex is the final identity
+# proof regardless of which adapter answered.
 board: apollo-h743
 mcu: STM32H743IIT6
-description: ALIENTEK Apollo dev board, console on USART1 via onboard CH340
+description: ALIENTEK Apollo core board, console on USART1 header via external USB-TTL adapter
 
 firmware:
   dir: ../../apollo                   # relative to this yaml file
@@ -16,8 +19,9 @@ flash:
   address: "0x08000000"
 
 serial:
-  vid: 0x1A86                        # QinHeng / WCH
-  pids: [0x7523, 0x5523]             # CH340 / CH341
+  port: ""                            # explicit override (e.g. COM3); empty = auto
+  vid: 0x1A86                        # detection HINT: CH340/CH341 adapters
+  pids: [0x7523, 0x5523]
   baudrate: 115200
   banner_regex: 'FLASHGATE-BOOT board=(?P<board>\S+) git=(?P<git>\S+) build=(?P<build>\S+) rtos=(?P<rtos>\S+)'
   banner_timeout_s: 15

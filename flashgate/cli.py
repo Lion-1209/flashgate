@@ -77,12 +77,12 @@ def cmd_doctor(board: Board) -> int:
             problems.append("no ST-Link probe detected (check USB, power, driver)")
             print(_red("  ST-Link    : none detected"))
 
-    port = serialmon.find_console_port(board.usb_vid, board.usb_pids)
+    port, why = serialmon.resolve_console_port(board.serial_port, board.usb_vid, board.usb_pids)
     if port:
-        print(_green(f"  console    : {port} @ {board.baudrate}"))
+        print(_green(f"  console    : {port} @ {board.baudrate}  [{why}]"))
     else:
-        problems.append("console serial port not found (check CH340 USB cable and PA9/PA10 jumper caps on the board)")
-        print(_red("  console    : NOT FOUND"))
+        problems.append(f"console serial port unresolved: {why}")
+        print(_red(f"  console    : UNRESOLVED — {why}"))
 
     env = augmented_env()
     for tool in ("cmake", "ninja", "arm-none-eabi-gcc"):
@@ -148,13 +148,16 @@ def cmd_flash(board: Board) -> int:
     return EXIT_OK
 
 
+def _console_port(board: Board) -> tuple[str | None, str]:
+    return serialmon.resolve_console_port(board.serial_port, board.usb_vid, board.usb_pids)
+
+
 def cmd_verify(board: Board) -> int:
     print(_cyan(f"[verify] {board.name}: build -> flash -> boot banner"))
 
-    port = serialmon.find_console_port(board.usb_vid, board.usb_pids)
+    port, why = _console_port(board)
     if port is None:
-        print(_red("[verify] console serial port not found — connect the board's USB-serial cable, "
-                   "check PA9/PA10 jumper caps, then run `flashgate doctor`"))
+        print(_red(f"[verify] console serial port unresolved — {why}"))
         return EXIT_ENV
     try:
         conn = serialmon.open_flush(port, board.baudrate)
@@ -207,9 +210,9 @@ def cmd_verify(board: Board) -> int:
 
 
 def cmd_console(board: Board) -> int:
-    port = serialmon.find_console_port(board.usb_vid, board.usb_pids)
+    port, why = _console_port(board)
     if port is None:
-        print(_red("console serial port not found — run `flashgate doctor`"))
+        print(_red(f"console serial port unresolved — {why}"))
         return EXIT_ENV
     print(_cyan(f"[console] {port} @ {board.baudrate} — Ctrl+C to exit"))
     try:

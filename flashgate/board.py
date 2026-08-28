@@ -25,6 +25,7 @@ class Board:
     artifact: Path
     flash_connect: str
     flash_address: str
+    serial_port: str
     usb_vid: int
     usb_pids: tuple[int, ...]
     baudrate: int
@@ -69,6 +70,7 @@ def load_board(yaml_path: Path) -> Board:
             artifact=(base / fw["dir"] / fw["artifact"]).resolve(),
             flash_connect=flash.get("connect", "port=SWD"),
             flash_address=str(flash.get("address", "0x08000000")),
+            serial_port=str(ser.get("port", "") or ""),
             usb_vid=int(str(ser.get("vid", "0x1A86")), 0),
             usb_pids=tuple(int(str(p), 0) for p in ser.get("pids", [])),
             baudrate=int(ser.get("baudrate", 115200)),

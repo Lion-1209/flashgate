@@ -1,7 +1,8 @@
-"""Console serial: find the USB-serial bridge, wait for the boot banner."""
+"""Console serial: resolve the USB-TTL adapter, wait for the boot banner."""
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time
@@ -9,6 +10,8 @@ from dataclasses import dataclass
 
 import serial
 from serial.tools import list_ports
+
+ENV_PORT = "FLASHGATE_SERIAL_PORT"
 
 
 @dataclass
@@ -19,11 +22,34 @@ class BannerResult:
     error_hit: str | None
 
 
-def find_console_port(vid: int, pids: tuple[int, ...]) -> str | None:
-    for port in list_ports.comports():
-        if port.vid == vid and (not pids or port.pid in pids):
-            return port.device
-    return None
+def resolve_console_port(
+    explicit_port: str,
+    vid: int,
+    pids: tuple[int, ...],
+) -> tuple[str | None, str]:
+    """Layered port resolution. Returns (device, why) so doctor can explain.
+
+    1. explicit port (yaml `serial.port` or env FLASHGATE_SERIAL_PORT)
+    2. VID/PID hint — matches common USB-TTL bridges (CH340/CP210x/FT232...)
+    3. sole serial port on the machine
+    The banner regex remains the final identity proof in every case: a wrong
+    port simply never matches and verify times out with a clear error.
+    """
+    explicit = (os.environ.get(ENV_PORT) or explicit_port or "").strip()
+    if explicit:
+        return explicit, "explicit (config/env override)"
+
+    ports = list_ports.comports()
+    for p in ports:
+        if p.vid == vid and (not pids or p.pid in pids):
+            return p.device, f"VID/PID hint {p.vid:04X}:{p.pid:04X} ({p.description})"
+    if len(ports) == 1:
+        return ports[0].device, f"sole serial port ({ports[0].description})"
+
+    if not ports:
+        return None, "no serial ports on this machine — plug in the USB-TTL adapter"
+    names = ", ".join(f"{p.device} ({p.description})" for p in ports)
+    return None, f"ambiguous: multiple serial ports [{names}] — set serial.port or {ENV_PORT}"
 
 
 def open_flush(device: str, baudrate: int) -> serial.Serial:
