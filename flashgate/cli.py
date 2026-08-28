@@ -14,6 +14,8 @@ import sys
 import time
 from pathlib import Path
 
+import serial
+
 from . import __version__
 from .board import Board, BoardError, default_board_path, load_board
 from . import flasher, serialmon
@@ -154,7 +156,12 @@ def cmd_verify(board: Board) -> int:
         print(_red("[verify] console serial port not found — connect the board's USB-serial cable, "
                    "check PA9/PA10 jumper caps, then run `flashgate doctor`"))
         return EXIT_ENV
-    conn = serialmon.open_flush(port, board.baudrate)
+    try:
+        conn = serialmon.open_flush(port, board.baudrate)
+    except serial.SerialException as exc:
+        print(_red(f"[verify] cannot open {port}: {exc} — close any serial terminal "
+                   "(串口助手/putty/VSCode serial monitor) holding the port, then retry"))
+        return EXIT_ENV
 
     try:
         rc = _build(board)
