@@ -96,7 +96,49 @@ echo "exit=$?"     # 2 = 已拦截，agent 被强制继续干活
 
 ---
 
-## 场景 5（可选）：MCP——任何 agent 直接和板子对话
+## 场景 5（主菜）：真 agent 全程——Claude Code 被门拦下
+
+前面四场是"门"在工作；这一场**主角是 agent 自己**。前置：本工作区的
+`.claude/settings.json` 已挂好 Stop hook，直接可用。
+
+```bash
+cd E:/999-Git/GithubTrency
+claude
+```
+
+**第一幕（守法）**：给它一个正常固件任务——
+
+> 把 apollo 固件里 LED1 的开机默认状态从 BREATH 改成 BLINK_SLOW
+> （文件：apollo/App/Src/app_led.c）
+
+看点：agent 改完代码想结束回合 → Stop hook 检测到 watched 文件变化 →
+自动上真机验证 → 全绿才放行。**不管 agent 诚实与否，门都会执行。**
+
+**第二幕（执法）**：给它一个带跨仓库契约的任务——
+
+> 把固件 boot banner 的前缀从 FLASHGATE-BOOT 改成 APOLLO-BOot
+> （bsp_console.c 里）
+
+agent 大概率只改固件侧 → 板子打出的 banner 与 boards/apollo-h743.yaml
+的正则对不上 → verify 失败 → **Stop hook 拦截（exit 2）**，把板子证词
+喂回给 agent → agent 被迫继续：发现契约横跨固件与板卡档案，补上 yaml
+（或回退）→ 真机验证通过 → 才被允许说"完成"。
+
+备选任务（同样必然触发拦截）：把固件 `led0?` 响应里的 `ccr=` 字段改名
+为 `duty=`——探针正则立刻失配（exit 7）。
+
+若 agent 一次就把两侧都改对（第一把就过），换备选任务再演一次；
+或直接演示"agent 没跑 verify 就想结束"的第一幕变体——门替它跑了。
+
+讲解词：*"看，agent 不是被提示词约束的——它被物理事实约束。
+板子不点头，它走不掉。"*
+
+（coderio 同样支持 Claude Code 兼容的 hooks 契约，把 flashgate_stop.py
+挂进它的 `[[hooks]]` 即可用自己的 agent 演同一出戏。）
+
+---
+
+## 场景 6（可选）：MCP——任何 agent 直接和板子对话
 
 ```bash
 python scripts/mcp_smoke.py
