@@ -1,7 +1,7 @@
 # flashgate
 
 **The agent can't claim the firmware works — until the board says so.**
-[中文说明](#中文说明) ↓
+[中文说明](#中文说明) · **[使用说明 / User Guide](docs/GUIDE.md)**（中文，从接线到接 agent 的完整上手）
 
 flashgate is a hardware-in-the-loop verification gate for coding agents
 (Claude Code, Codex, coderio, …). It closes the loop every coding agent is
@@ -183,6 +183,9 @@ MIT
 # 中文说明
 
 **agent 不能说固件能跑——除非板子亲口说。**
+
+📖 **完整使用说明见 [docs/GUIDE.md](docs/GUIDE.md)**：硬件接线、安装、五分钟上手、
+自定义板卡档案、探针编写、Stop hook / MCP 安装、排坑表。
 
 flashgate 是给 coding agent（Claude Code / Codex / coderio……）用的**硬件在环验证门**，补上所有 coding agent 在固件开发里都缺的那一环：编译通过不等于能用，agent 说"完成"不算完成，**板子自己说了才算**。
 
