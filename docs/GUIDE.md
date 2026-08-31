@@ -412,47 +412,206 @@ DTCM 解决。如果你的芯片没有这类内存，走 MPU 路线。
 验收：yaml 的 evidence.signature.address 填你挑的地址，
 flashgate verify --evidence swd 退出码 0。
 
-### 6.3 第三档：探针命令
+### 6.3 第三档：探针命令（固件侧）
 
-想验证"改的那个功能真的能用"，固件在串口上实现一个行协议。
-约定很少：
+先说清楚这一档做完是什么效果：固件学会用串口对话。电脑发
+`led on`，固件做动作并回答 `OK led state=on`。第 7 节的探针就是把
+这样的对话写成脚本去执行，所以固件侧的全部工作就是：实现命令。
 
-- 收一行命令，回一行响应，以 \r\n 结尾
-- 成功的响应以 OK 开头，失败的以 ERR 开头
-- 命令和字段名你自己定，yaml 里配对
+一个最小的命令处理器要三样东西，缺一不可：
 
-协议骨架，轮询式，六十行上下：
+1. 发一行的函数
+2. 收一行的函数——这是最陌生的部分：串口一次到一个字节，
+   "一行"要自己攒
+3. 一个分发循环：认出收到的是哪条命令，做动作，回答
+
+下面把三样全部写出来。以 HAL 库和 USART1 为例，别的串口改一下
+句柄就行。
+
+**发一行。** 调用 HAL 的阻塞发送，加一个 printf 风格的封装，
+后面所有命令都用它回答：
 
 ```c
-for (;;) {
-    if (uart_line_ready(line, sizeof line)) {
-        if (strcmp(line, "ping") == 0) {
-            printf("OK pong git=%s\r\n", APP_GIT_SHA);
-        } else if (strcmp(line, "led on") == 0) {
-            led_set(1);
-            printf("OK led state=%s\r\n", led_get() ? "on" : "off");
-        } else if (strcmp(line, "led?") == 0) {
-            printf("OK led state=%s duty=%lu\r\n",
-                   led_get() ? "on" : "off",
-                   (unsigned long)timer_ccr_read());
-        } else {
-            printf("ERR unknown-cmd\r\n");
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+static void send_line(const char *s)
+{
+    HAL_UART_Transmit(&huart1, (const uint8_t *)s, strlen(s), 100);
+    HAL_UART_Transmit(&huart1, (const uint8_t *)"\r\n", 2, 100);
+}
+
+static void reply(const char *fmt, ...)
+{
+    char buf[64];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    send_line(buf);
+}
+```
+
+**收一行。** 分两步：先有"取一个字节"的函数，再用它攒行。
+取字节有两种做法，按你的工程节奏选。
+
+做法甲，轮询。适合裸机主循环里没别的大活的情况：
+
+```c
+static int uart_getc(void)
+{
+    uint8_t b;
+    if (HAL_UART_Receive(&huart1, &b, 1, 2) == HAL_OK)
+        return b;
+    return -1;                  /* 两毫秒没等到数据 */
+}
+```
+
+注意轮询的代价：STM32 的串口接收寄存器只有一个字节深，主循环
+转得比字节到达慢就会丢数据（过载）。115200 波特率下大约 86 微秒
+一个字节，主循环里有耗时毫秒级的活就必须换做法乙。
+
+做法乙，接收中断加环形缓冲。任何节奏都稳，示例固件
+（bsp_console.c）用的就是这个：
+
+```c
+#define RXBUF 64u
+static volatile uint8_t  rx_buf[RXBUF];
+static volatile uint16_t rx_head, rx_tail;
+
+void USART1_IRQHandler(void)
+{
+    if (USART1->ISR & USART_ISR_RXNE) {
+        uint8_t b = (uint8_t)USART1->RDR;
+        uint16_t next = (rx_head + 1u) % RXBUF;
+        if (next != rx_tail) {          /* 满了就丢，保护旧数据 */
+            rx_buf[rx_head] = b;
+            rx_head = next;
         }
+    }
+}
+
+static int uart_getc(void)
+{
+    if (rx_tail == rx_head) return -1;  /* 缓冲空 */
+    uint8_t b = rx_buf[rx_tail];
+    rx_tail = (rx_tail + 1u) % RXBUF;
+    return b;
+}
+```
+
+初始化时开中断（在串口初始化之后加两行）：
+
+```c
+HAL_NVIC_SetPriority(USART1_IRQn, 5, 0);
+HAL_NVIC_EnableIRQ(USART1_IRQn);
+__HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE);
+```
+
+两种做法的 uart_getc 接口一样，下面的攒行函数不用改：
+
+```c
+static int uart_readline(char *buf, int size)
+{
+    static int len = 0;         /* 跨调用保留攒了一半的行 */
+    int c = uart_getc();
+    if (c < 0) return 0;        /* 没数据，下次再来 */
+
+    if (c == '\r' || c == '\n') {
+        if (len == 0) return 0; /* 行首的换行忽略 */
+        buf[len] = '\0';
+        len = 0;
+        return 1;               /* 攒满一行 */
+    }
+    if (len < size - 1) {
+        buf[len++] = (char)c;
+    } else {
+        len = 0;                /* 太长的行整个丢掉 */
+    }
+    return 0;
+}
+```
+
+它每次只处理一个字节，没攒够一行就返回 0，攒够返回 1。调用它的
+循环要经常来转，其余逻辑不 blocking 就行。
+
+**分发循环。** 把上面两样拼起来，加上你自己的命令：
+
+```c
+static void handle_line(const char *line)
+{
+    if (strcmp(line, "led on") == 0) {
+        led_set(1);
+        reply("OK led state=%s", led_get() ? "on" : "off");
+        return;
+    }
+    if (strcmp(line, "led?") == 0) {
+        reply("OK led state=%s duty=%lu",
+              led_get() ? "on" : "off",
+              (unsigned long)TIM3->CCR1);
+        return;
+    }
+    if (strcmp(line, "ping") == 0) {
+        reply("OK pong");
+        return;
+    }
+    reply("ERR unknown-cmd");
+}
+
+/* 裸机：挂在主循环里 */
+for (;;) {
+    char line[64];
+    if (uart_readline(line, sizeof line))
+        handle_line(line);
+    /* 原有的其他工作 */
+}
+
+/* RTOS：一个低优先级任务 */
+static void console_task(void *arg)
+{
+    char line[64];
+    for (;;) {
+        if (uart_readline(line, sizeof line))
+            handle_line(line);
+        else
+            osDelay(10);
     }
 }
 ```
 
-RTOS 工程里丢一个低优先级任务跑这个循环；裸机就挂在主循环里。
+led_set 和 led_get 是你工程里本来就有的东西，没有就补两个最简单
+的（写 GPIO、读 GPIO）。TIM3->CCR1 那个字段演示的是"寄存器读回"：
+直接把定时器比较寄存器的当前值报出去，这是比固件自述更硬的证据，
+你的命令里能摸到什么寄存器就报什么。
 
-两条设计经验，都来自实际踩坑：
+**固件代码和 yaml 探针的对应关系。** 这是两边的接缝，看清楚就
+全通了。固件里打印什么字符串，yaml 里就用对应的字符串去接：
 
-响应要报读回来的实际状态，不要回声请求。上面 led on 的响应里
-state 是再读一次硬件后的值。设置类命令静默失效是最难缠的一类
-bug，回声式响应永远发现不了，回读式第一步就露馅。
+```
+固件代码                          yaml 探针
+strcmp(line, "led on")       ↔   send: "led on"
+reply("OK led state=%s",...) ↔   expect: '^OK led state=(on|off)$'
+```
 
-查询类命令尽量报寄存器实际值。duty=%lu 那个字段是定时器 CCR
-寄存器的当前读数。寄存器不会说谎，这是能给的最硬的证据；固件
-自己"认为"的状态只能作参考。
+配套的探针长这样，跟第 7.2 节的例子同一套写法：
+
+```yaml
+probes:
+  led:
+    steps:
+      - send: "led on"
+        expect: '^OK led state=on$'
+      - send: "led?"
+        expect: '^OK led state=(?P<state>\S+) duty=(?P<duty>\d+)$'
+        assert: "state == on and duty > 0"
+```
+
+固件侧不需要知道探针的存在，两边唯一的耦合就是这些字符串。
+
+验收：编译烧录后不用写 yaml，先拿串口助手手动发 `led on`，看
+回答是不是 `OK led state=on`。对话正常，再写 yaml，跑
+`flashgate probe` 实测。
 
 ### 6.4 主机侧：板卡档案
 
