@@ -524,30 +524,27 @@ app_console.c（行协议）。
 
 ## 7. 功能探针
 
-启动验证只证明固件活着，探针进一步证明你改的那个功能真的能用。
-原理：主机经串口下命令，断言板子的回答。
+### 7.1 探针是什么
 
-固件侧是一个很简单的行协议，一命令一响应。示例固件实现了这些：
+一句话：探针是一份写在板卡档案里的对话脚本。flashgate 照着脚本跟
+固件说话，发一句、检查一句回答，全部对话通过探针就通过，任何一句
+不对就失败。
+
+参与三方，各管一件事：
 
 ```
-命令            响应
-ping            OK pong git=<版本> build=<时间>
-led0? / led1?   OK led<N> state=<状态> ccr=<0..1000>
-led0 <状态>     OK led<N> state=<状态>
-selftest        OK selftest leds=2 states=BREATH
-demo on|off     OK demo on|off
+固件        实现命令（6.3 节的行协议）：收一行，做动作，回一行
+板卡档案    声明对话：每一步发什么、期望什么回答、检查什么值
+flashgate   执行对话：打开串口，按脚本逐条收发，判定结果
 ```
 
-状态取值 OFF、ON、BLINK_SLOW、BLINK_FAST、BREATH，大小写不敏感。
+命令是你自己在固件里定的，flashgate 不知道也不关心命令的业务含义，
+它只做字面上的发送和匹配。
 
-有个设计细节值得强调：`led0 breath` 的响应里报的是读回来的实际
-状态，不是把你请求的词原样弹回来。这样设计是因为最难缠的一类
-bug 是设置函数静默失效：编译没警告，板子正常启动，ping 也通，但
-设置根本没生效。回读式响应让这种 bug 在第一步就露馅，板子会回
-`OK led0 state=OFF`，跟你请求的 BREATH 对不上。
+### 7.2 一个探针从头到尾
 
-探针定义在板卡档案的 `probes:` 节，由若干步组成，每步是发一条命令、
-等一行匹配 expect 正则的响应、可选地对捕获组做 assert：
+拿示例固件走一个完整的例子。固件实现了 led0 命令，档案里声明了
+这样一个探针：
 
 ```yaml
 probes:
@@ -562,23 +559,106 @@ probes:
         assert: "state == BREATH and ccr <= 1000"
 ```
 
-assert 的语法是 `名字 操作符 值`，操作符支持 `== != > < >= <=`，多个
-子句用 and 连接。值是数字就按数字比。这个求值器是手写的几十行
-代码，不走 eval，探针文件是数据不是代码。
+flashgate verify --all-probes 跑到探针阶段时，串口线上实际发生的
+事。每一步都是两句：电脑发一句，板子回一句。
 
-写断言有个原则：断言确定性的量，别断言瞬时值。呼吸灯进行中每次读
-ccr 都是不同的数，断言 `ccr == 512` 必然闪断；断言状态、断言范围
-（`ccr <= 1000`）才是稳的。
+第一步：
 
-运行方式：
-
-```powershell
-flashgate verify --all-probes      # 完整闭环带全部探针
-flashgate verify --probe led-demo  # 指定探针，可重复给多个
-flashgate probe                    # 不编译不烧录，直接探正在跑的固件
+```
+电脑 -> 板子:  led0 breath\r\n
+板子 -> 电脑:  OK led0 state=BREATH\r\n
 ```
 
-第三种在调固件的时候很好用，改完烧完手动探一下，不用每次走全流程。
+固件收到后把 LED0 设成呼吸态，再读一次实际状态，把读到的填进响应。
+flashgate 发完就计时，等一行能匹配 expect 的响应。板子回了上面
+那行，正则 '^OK led0 state=BREATH$' 匹配，第一步过。
+
+第二步：
+
+```
+电脑 -> 板子:  led0?\r\n
+板子 -> 电脑:  OK led0 state=BREATH ccr=691\r\n
+```
+
+这步的 expect 里有两个命名组：(?P<state>\S+) 从响应里抓到
+"BREATH"，(?P<ccr>\d+) 抓到 "691"。匹配成功后，assert 对这两个
+值做检查：state == BREATH 成立，ccr <= 1000 成立，第二步过。
+
+两步都过，这个探针通过；全部探针都通过，verify 的退出码才是 0。
+上面整个对话两三秒跑完。
+
+值得再点一次 ccr=691 是什么：固件收到 led0? 后，从 TIM3 的 CCR
+寄存器里读出当前值填进响应。flashgate 检查的是寄存器读回值，不是
+固件自称的状态。这就是探针能抓"固件以为自己对"这类问题的原因。
+
+### 7.3 失败的三种样子
+
+探针失败只有三种原因，每种长这样。
+
+固件直接报错。响应以 ERR 开头，立即失败，不再等超时：
+
+```
+电脑 -> 板子:  led0 breath\r\n
+板子 -> 电脑:  ERR bad-state name=breath\r\n
+[probe] FAIL — firmware error: 'ERR bad-state name=breath' (step 1)
+```
+
+响应对不上，或者没有响应。等满 step_timeout_s 秒，没有出现能匹配
+expect 的行就超时。报文会带上最后收到的那行，方便对比差在哪：
+
+```
+电脑 -> 板子:  led0 breath\r\n
+板子 -> 电脑:  OK led0 state=OFF\r\n
+[probe] FAIL — timeout waiting for /^OK led0 state=BREATH$/ after
+           'led0 breath' (step 1), last response: 'OK led0 state=OFF'
+```
+
+这个例子正是设置静默失效的样子：请求的是 BREATH，读回来是 OFF。
+板子自己把问题说了出来。
+
+断言不过。响应本身匹配上了，但抓到的值不满足 assert：
+
+```
+板子 -> 电脑:  OK led0 state=BLINK_SLOW ccr=1000\r\n
+[probe] FAIL — assert failed: 'state == BREATH and ccr <= 1000'
+           against {'state': 'BLINK_SLOW', 'ccr': '1000'} (step 2)
+```
+
+### 7.4 探针字段速查
+
+| 字段 | 含义 |
+|---|---|
+| probes 下的一级键 | 探针名，--probe 参数用它指定 |
+| description | 描述，跑的时候打印出来 |
+| step_timeout_s | 每一步等响应的秒数，默认 3 |
+| steps | 步骤列表，按顺序执行 |
+| send | 这一步发给固件的一行，不带换行符，flashgate 自己加 \r\n |
+| expect | 对固件响应一行的正则；匹配对象是去掉 \r\n 后的整行 |
+| assert | 对 expect 命名组的断言，可省略 |
+
+expect 用 Python 正则，^ 和 $ 锚的是这一行的头尾。响应里固件想带
+多少字段都行，你用命名组挑要检查的，剩下的忽略。
+
+assert 只能引用 expect 里抓到的命名组。操作符 == != > < >= <=，
+值是数字就按数字比，多个条件用 and 连接。没有 or，没有算术，
+这个求值器是手写的几十行代码，不走 eval，探针文件是数据不是代码。
+
+### 7.5 什么时候跑探针
+
+```powershell
+flashgate verify --all-probes       # 完整闭环：编译烧录启动验证之后自动进入探针阶段
+flashgate verify --probe led-demo   # 只跑指定的探针，参数可重复
+flashgate probe                     # 不编译不烧录，对正在跑的固件直接探
+```
+
+第三种在调固件时最常用：改完、烧完，手动探一下，不用每次走全流程。
+
+### 7.6 断言写什么
+
+原则：断言确定性的量，别断言瞬时值。呼吸灯进行中每次读 ccr 都是
+不同的数，断言 ccr == 512 必然闪断；断言状态、断言范围
+（ccr <= 1000）才是稳的。拿不准一个量稳不稳，用 flashgate probe
+连跑几次看它抖不抖。
 
 ## 8. Stop hook
 
