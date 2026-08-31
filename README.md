@@ -132,6 +132,19 @@ tools/call console_send {"line": "ping"}
 → OK pong git=c65c453-dirty build=2026-08-28T08:06:26Z
 ```
 
+## Demos (real hardware, real agent)
+
+| Scene | What you see |
+|---|---|
+| [0 — doctor](demo/0-doctor.gif) | hardware prerequisites check, all green |
+| [1 — verify green path](demo/1-verify-green.gif) | one command: build → flash → banner → probes, exit 0 |
+| [2 — boot timeout](demo/2-boot-timeout.gif) | dead-loop firmware compiles & flashes, board stays silent 15s, exit 3 |
+| [3 — probe catches silent no-op](demo/3-probe-fail.gif) | `led_set_state` returns early; readback says `state=OFF`, exit 7 |
+| [4 — Stop hook law](demo/4-stop-hook.gif) | blocked ×2, released with warning, then verified-green allowed |
+| [5 — real Claude Code agent blocked](https://github.com/Lion-1209/flashgate/releases/download/v0.2.0/5-agent-blocked.gif) | full interactive session: agent edits firmware, gets blocked, discovers the firmware↔profile contract, fixes both sides, verifies on hardware |
+
+![probe catches a silent no-op](demo/3-probe-fail.gif)
+
 ## Board profiles
 
 One yaml per board under `boards/`. Everything the gate needs is
@@ -206,6 +219,14 @@ exit 7，Stop hook 拦截 agent 的"完成"声明
 ## 路线图
 
 M1 启动门 ✔ · M2 探针门 ✔ · M3 执法 Stop hook ✔ · M4 MCP server ✔ ·
-演示 GIF 与 SWD 签名副通道（免串口线验证）待做
+SWD 签名副通道（免串口线验证）待做
+
+## 演示视频（全部真机实录）
+
+六个场景 GIF 见 [demo/](demo/) 目录（doctor 体检 / 绿路径 / 启动超时拦截 /
+探针抓静默失效 / Stop hook 执法），以及压轴的
+[真 Claude Code agent 被门拦下的完整会话](https://github.com/Lion-1209/flashgate/releases/download/v0.2.0/5-agent-blocked.gif)——
+agent 改固件想收工，被板子证词拦回，自己分析出固件与板卡档案的契约关系，
+两侧改齐、真机验证通过后才被放行。
 
 MIT License

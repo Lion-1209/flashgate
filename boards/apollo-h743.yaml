@@ -42,7 +42,7 @@ probes:
         assert: "state == BREATH and ccr <= 1000"
       - send: "led1?"
         expect: '^OK led1 state=(?P<state>\S+) ccr=(?P<ccr>\d+)$'
-        assert: "state == BREATH"
+        assert: "state == BLINK_SLOW"
       - send: "ping"
         expect: '^OK pong git=(?P<git>\S+) build=(?P<build>\S+)$'
       - send: "demo on"

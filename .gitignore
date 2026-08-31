@@ -4,3 +4,5 @@ __pycache__/
 build/
 dist/
 .venv/
+# 24MB full-quality recording lives as a GitHub release asset, not in git
+demo/5-agent-blocked.gif
