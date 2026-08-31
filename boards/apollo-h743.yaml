@@ -42,11 +42,20 @@ probes:
         assert: "state == BREATH and ccr <= 1000"
       - send: "led1?"
         expect: '^OK led1 state=(?P<state>\S+) ccr=(?P<ccr>\d+)$'
-        assert: "state == BLINK_SLOW"
+        assert: "state == BREATH"
       - send: "ping"
         expect: '^OK pong git=(?P<git>\S+) build=(?P<build>\S+)$'
       - send: "demo on"
         expect: '^OK demo on$'
+
+# Boot evidence channel: uart (banner over console) | swd (fixed-address RAM
+# signature read via ST-Link, no serial cable needed) | auto (uart preferred,
+# swd fallback). Functional probes need the console, so they run in uart mode.
+evidence:
+  mode: auto
+  signature:
+    address: "0x2001FF00"            # DTCM tail: core-local, never cached,
+    size: 64                          # always visible to the debug port
 
 # Exit-code contract (what the M3 Stop hook consumes):
 #   0 = verified  1 = build failed  2 = flash failed  3 = no banner (timeout)

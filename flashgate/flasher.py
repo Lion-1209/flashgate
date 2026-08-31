@@ -29,14 +29,15 @@ def _kill_stlinkserver() -> None:
     )
 
 
-def _attempt_flash(cli: Path, bin_path: Path, connect: str, address: str) -> tuple[bool, int, str]:
+def _attempt_flash(cli: Path, bin_path: Path, connect: str, address: str, start: bool) -> tuple[bool, int, str]:
     cmd = [
         str(cli),
         "--connect", connect,
         "--write", str(bin_path), address,
         "--verify",
-        "--start",
     ]
+    if start:
+        cmd.append("--start")
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=FLASH_TIMEOUT_S,
@@ -54,7 +55,7 @@ def _attempt_flash(cli: Path, bin_path: Path, connect: str, address: str) -> tup
     return False, proc.returncode, output.strip() or f"exit code {proc.returncode}"
 
 
-def flash(bin_path: Path, connect: str, address: str) -> FlashResult:
+def flash(bin_path: Path, connect: str, address: str, start: bool = True) -> FlashResult:
     cli = find_cubeprogrammer()
     if cli is None:
         return FlashResult(False, "STM32CubeProgrammer CLI not found (bundles or PATH)")
@@ -64,7 +65,7 @@ def flash(bin_path: Path, connect: str, address: str) -> FlashResult:
 
     last_detail = ""
     for attempt in range(1, FLASH_ATTEMPTS + 1):
-        ok, rc, output = _attempt_flash(cli, bin_path, connect, address)
+        ok, rc, output = _attempt_flash(cli, bin_path, connect, address, start)
         if ok:
             return FlashResult(True, output)
         last_detail = f"attempt {attempt}/{FLASH_ATTEMPTS} rc={rc}: {output[-1200:]}"
@@ -72,6 +73,48 @@ def flash(bin_path: Path, connect: str, address: str) -> FlashResult:
             _kill_stlinkserver()
             time.sleep(RETRY_DELAY_S)
     return FlashResult(False, last_detail)
+
+
+def write32(connect: str, value: int, address: int) -> bool:
+    """Single 32-bit memory write via a tiny temp file (CubeProgrammer's
+    --write only accepts files). Used to wipe a stale boot signature."""
+    cli = find_cubeprogrammer()
+    if cli is None:
+        return False
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        blob = Path(tmp) / "word.bin"
+        blob.write_bytes(value.to_bytes(4, "little"))
+        cmd = [str(cli), "--connect", connect,
+               "--write", str(blob), f"{address:#010x}"]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30,
+                env=augmented_env(), encoding="utf-8", errors="replace",
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+        output = (proc.stdout or "") + (proc.stderr or "")
+        return proc.returncode == 0 and "File download complete" in output
+
+
+def start_app(connect: str) -> bool:
+    """Reset and run the application (the `--start` step on its own)."""
+    cli = find_cubeprogrammer()
+    if cli is None:
+        return False
+    import subprocess
+    try:
+        proc = subprocess.run(
+            [str(cli), "--connect", connect, "--start"],
+            capture_output=True, text=True, timeout=30,
+            env=augmented_env(), encoding="utf-8", errors="replace",
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return proc.returncode == 0 and "achieved successfully" in (proc.stdout or "")
 
 
 def list_stlink() -> str:

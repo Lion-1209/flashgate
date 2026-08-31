@@ -5,4 +5,4 @@ says so: build -> flash -> boot banner over serial, with exit codes
 that an agent harness (Stop hook) can enforce.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

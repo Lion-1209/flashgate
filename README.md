@@ -8,12 +8,18 @@ flashgate is a hardware-in-the-loop verification gate for coding agents
 missing on firmware work:
 
 ```
-build → flash over ST-Link → board boots → banner over serial → exit code
+build → flash over ST-Link → board boots → evidence → exit code
 ```
 
-The firmware prints a boot banner carrying its **git sha + build time**
-(plus `-dirty` when the tree differs from HEAD, so the proof covers exactly
-what you're about to flash):
+Boot evidence comes over **either** channel, whichever your bench has:
+
+- **UART banner** — the firmware prints its identity over the console
+- **SWD signature** — the firmware publishes a 64-byte identity (magic +
+  git sha + build time + CRC32) at a fixed RAM address; the host reads it
+  through the **ST-Link alone**. No serial cable needed.
+
+Both carry the **git sha + build time** (plus `-dirty` when the tree
+differs from HEAD, so the proof covers exactly what you're about to flash):
 
 ```
 FLASHGATE-BOOT board=apollo-h743 git=2c58bd3 build=2026-08-28T07:26:35Z rtos=FreeRTOS
@@ -49,8 +55,9 @@ USB-TTL adapter wired to the board's console UART.
 flashgate doctor            # ST-Link / serial / toolchain sanity
 flashgate build             # firmware build only
 flashgate flash             # write + verify + start (auto-retry on USB flakes)
-flashgate verify            # THE gate: build → flash → banner → sha
-flashgate verify --all-probes   # + functional probes (claim-proportional)
+flashgate verify            # THE gate: build → flash → evidence → sha
+flashgate verify --evidence swd   # SWD signature only — no serial cable
+flashgate verify --all-probes    # + functional probes (claim-proportional)
 flashgate probe [NAME...]   # probes against already-running firmware
 flashgate console           # live serial monitor
 echo $?                     # consume the verdict
@@ -165,8 +172,8 @@ proof regardless of which adapter answered.
 - **M1**: build → flash → banner → sha loop ✔
 - **M2**: serial probe protocol (`led0?` → state + real CCR readback) ✔
 - **M3**: Claude Code Stop hook — unverified changes block "done" ✔
-- **M4**: MCP server ✔ · demo GIF ☐ · SWD-signature evidence channel
-  (no serial cable needed) ☐
+- **M4**: MCP server ✔ · demo GIFs ✔ · SWD-signature evidence channel
+  (verify without a serial cable) ✔
 
 ## License
 
@@ -219,7 +226,14 @@ exit 7，Stop hook 拦截 agent 的"完成"声明
 ## 路线图
 
 M1 启动门 ✔ · M2 探针门 ✔ · M3 执法 Stop hook ✔ · M4 MCP server ✔ ·
-SWD 签名副通道（免串口线验证）待做
+SWD 签名副通道（免串口线验证）✔
+
+## 双证据通道
+
+串口线不在也没关系：固件在 DTCM 固定地址发布 64 字节签名（magic +
+git sha + 构建时间 + CRC32），flashgate 通过 ST-Link 直接读物理 RAM 验证
+（`verify --evidence swd`）；烧录后先擦除旧签名再启动——RAM 不随复位清零，
+陈旧签名会说谎。串口在场时自动走 uart 通道并附带功能探针（`auto` 模式）。
 
 ## 演示视频（全部真机实录）
 

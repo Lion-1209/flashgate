@@ -35,6 +35,9 @@ class Board:
     banner_timeout_s: float
     error_patterns: tuple[str, ...]
     watch_globs: tuple[str, ...]
+    evidence_mode: str
+    sig_address: int
+    sig_size: int
     yaml_path: Path
 
     def head_sha(self) -> str | None:
@@ -71,6 +74,8 @@ def load_board(yaml_path: Path) -> Board:
     ser = raw.get("serial") or {}
 
     base = yaml_path.parent
+    ev = raw.get("evidence") or {}
+    sig = ev.get("signature") or {}
     try:
         board = Board(
             name=raw["board"],
@@ -90,6 +95,9 @@ def load_board(yaml_path: Path) -> Board:
             banner_timeout_s=float(ser.get("banner_timeout_s", 15)),
             error_patterns=tuple(ser.get("error_patterns", [])),
             watch_globs=tuple((raw.get("gate") or {}).get("watch", DEFAULT_WATCH)),
+            evidence_mode=str(ev.get("mode", "auto")),
+            sig_address=int(str(sig.get("address", "0x2407FF00")), 0),
+            sig_size=int(sig.get("size", 64)),
             yaml_path=yaml_path,
         )
     except KeyError as exc:

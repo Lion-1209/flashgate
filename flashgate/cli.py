@@ -21,7 +21,7 @@ import yaml
 
 from . import __version__
 from .board import Board, BoardError, default_board_path, load_board
-from . import flasher, probes as probe_mod, serialmon
+from . import flasher, probes as probe_mod, serialmon, swdsig
 from .sttools import augmented_env, find_cubeprogrammer
 
 EXIT_OK = 0
@@ -139,6 +139,17 @@ def cmd_doctor(board: Board) -> int:
     sha = board.head_sha()
     print(f"  HEAD sha   : {sha or 'unknown'}")
 
+    # Live SWD signature: what the board is running RIGHT NOW, no serial needed
+    try:
+        info, _ = swdsig.wait_for_signature(
+            board.flash_connect, board.sig_address, board.sig_size, timeout_s=2.0)
+        if info:
+            print(_green(f"  on-board   : git={info['git']} build={info['build']} (SWD signature)"))
+        else:
+            print(_yellow("  on-board   : no SWD signature (old firmware?)"))
+    except swdsig.SwdError as exc:
+        print(_yellow(f"  on-board   : SWD read unavailable ({exc})"))
+
     if problems:
         print(_yellow("  issues:"))
         for p in problems:
@@ -237,7 +248,79 @@ def _run_probes(board: Board, names: list[str] | None, conn) -> int:
     return EXIT_OK
 
 
-def cmd_verify(board: Board, probe_names: list[str] | None) -> int:
+def cmd_verify(board: Board, probe_names: list[str] | None, evidence: str | None = None) -> int:
+    mode = (evidence or board.evidence_mode or "auto").lower()
+    if mode == "auto":
+        mode = "uart" if _console_port(board)[0] else "swd"
+
+    if mode == "swd":
+        return _verify_swd(board, probe_names)
+    return _verify_uart(board, probe_names)
+
+
+def _verify_swd(board: Board, probe_names: list[str] | None) -> int:
+    """Boot gate through the ST-Link alone: fixed-address RAM signature.
+    No serial cable needed; functional probes are skipped (they need the
+    console) unless a probe run is explicitly requested and a port exists."""
+    print(_cyan(f"[verify] {board.name}: build -> flash -> SWD signature"))
+    rc = _build(board)
+    if rc != EXIT_OK:
+        return rc
+
+    # Flash WITHOUT starting, wipe the stale signature, then start: RAM is
+    # not cleared by reset, so a surviving old-boot signature would lie.
+    result = flasher.flash(board.artifact, board.flash_connect, board.flash_address,
+                           start=False)
+    if not result.ok:
+        print(_red("[flash] FAILED"))
+        print(result.detail[-1200:])
+        return EXIT_FLASH
+    if not flasher.write32(board.flash_connect, 0, board.sig_address):
+        print(_yellow("[verify] warning: could not wipe the old signature "
+                      "(stale-identity false-pass window)"))
+    if not flasher.start_app(board.flash_connect):
+        print(_red("[flash] FAILED to start the application"))
+        return EXIT_FLASH
+
+    print(_cyan(f"[verify] polling signature @ {board.sig_address:#010x} via {board.flash_connect}"))
+    info, err = swdsig.wait_for_signature(
+        board.flash_connect, board.sig_address, board.sig_size,
+        timeout_s=board.banner_timeout_s)
+    if info is None:
+        print(_red(f"[verify] TIMEOUT: board never published its SWD signature ({err})"))
+        return EXIT_BANNER_TIMEOUT
+
+    print(_green(f"[verify] signature OK: git={info['git']} build={info['build']} "
+                 f"flags={info['flags']:#x}"))
+
+    expected = board.head_sha()
+    if expected and info["git"] != expected:
+        print(_red(f"[verify] SHA MISMATCH: board runs {info['git']}, repo HEAD is {expected} "
+                   "(rebuild after committing?)"))
+        return EXIT_SHA_MISMATCH
+
+    if probe_names is not None:
+        port, _ = _console_port(board)
+        if port is None:
+            print(_yellow("[verify] probes skipped: no console serial in swd mode"))
+        else:
+            try:
+                conn = serialmon.open_flush(port, board.baudrate)
+            except serial.SerialException as exc:
+                print(_yellow(f"[verify] probes skipped: cannot open {port} ({exc})"))
+                return EXIT_OK
+            try:
+                return _run_probes(board, None if probe_names == ["all"] else probe_names, conn)
+            finally:
+                conn.close()
+        return EXIT_OK
+
+    print(_green(f"[verify] PASS — the board's RAM itself confirms the firmware booted "
+                 f"(git={info['git']}), no serial cable involved"))
+    return EXIT_OK
+
+
+def _verify_uart(board: Board, probe_names: list[str] | None) -> int:
     all_probes = probe_names == ["all"]
     title = "[verify] {b}: build -> flash -> boot banner" + (" -> probes" if probe_names is not None else "")
     print(_cyan(title.format(b=board.name)))
@@ -347,6 +430,8 @@ def main(argv: list[str] | None = None) -> int:
                           help="run functional probes after banner (repeatable)")
     p_verify.add_argument("--all-probes", action="store_true",
                           help="run every probe defined in the board profile")
+    p_verify.add_argument("--evidence", choices=["uart", "swd", "auto"],
+                          help="boot-evidence channel (default: board profile evidence.mode)")
     p_probe = sub.add_parser("probe", help="run probes against running firmware")
     p_probe.add_argument("names", nargs="*", metavar="NAME",
                          help="probe names (default: all defined in the board profile)")
@@ -364,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
             names: list[str] | None = args.probe
             if args.all_probes:
                 names = ["all"]
-            return cmd_verify(board, names)
+            return cmd_verify(board, names, getattr(args, "evidence", None))
         if args.cmd == "probe":
             return cmd_probe(board, args.names or None)
         simple = {
