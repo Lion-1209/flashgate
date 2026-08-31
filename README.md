@@ -95,11 +95,11 @@ and 2.x supported.
 
 ## Demos
 
-Real-hardware recordings in [demo/](demo/): doctor, green-path verify,
-boot-timeout catch, probe catching a silent no-op, Stop-hook escalation —
-plus the full session of a real Claude Code agent getting blocked,
-diagnosing the firmware↔profile contract, fixing both sides, and passing
-on hardware ([large GIF, release asset](https://github.com/Lion-1209/flashgate/releases/download/v0.2.0/5-agent-blocked.gif)).
+Real-hardware recordings, indexed in [demo/](demo/README.md): doctor,
+green-path verify, boot-timeout catch, probe catching a silent no-op,
+Stop-hook escalation — plus the full session of a real Claude Code agent
+getting blocked, diagnosing the firmware↔profile contract, fixing both
+sides, and passing on hardware ([24 MB GIF, release asset](https://github.com/Lion-1209/flashgate/releases/download/v0.3.0/5-agent-blocked.gif)).
 
 ## Board profiles
 
