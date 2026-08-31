@@ -96,7 +96,7 @@ def load_board(yaml_path: Path) -> Board:
             error_patterns=tuple(ser.get("error_patterns", [])),
             watch_globs=tuple((raw.get("gate") or {}).get("watch", DEFAULT_WATCH)),
             evidence_mode=str(ev.get("mode", "auto")),
-            sig_address=int(str(sig.get("address", "0x2407FF00")), 0),
+            sig_address=int(str(sig.get("address", "0x2001FF00")), 0),
             sig_size=int(sig.get("size", 64)),
             yaml_path=yaml_path,
         )
