@@ -98,7 +98,7 @@ echo "exit=$?"     # 2 = 已拦截，agent 被强制继续干活
 ```
 
 再跑两次同一条命令：第二次仍拦截（2/2），第三次放行但大声警告
-同一棵坏树最多拦两次，第三次放行但打警告（coderio VerifyGate 的语义）。
+同一棵坏树最多拦两次，第三次放行但打警告。
 
 这时可以说：在 Claude Code 里这段逻辑挂在 Stop 事件上。agent 想结束，
 门先问板子；板子不确认，agent 就得继续修。
@@ -144,8 +144,7 @@ agent 大概率只改固件侧 → 板子打出的 banner 与 boards/apollo-h743
 这时可以说：agent 不是被提示词管着的，是被物理事实管着的。板子
 不确认，它走不掉。
 
-（coderio 同样支持 Claude Code 兼容的 hooks 契约，把 flashgate_stop.py
-挂进它的 `[[hooks]]` 即可用自己的 agent 演同一出戏。）
+（其他支持 Claude Code 兼容 hooks 契约的 harness 也能挂同一个脚本。）
 
 ---
 

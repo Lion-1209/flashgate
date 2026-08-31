@@ -18,7 +18,7 @@ flashgate 是一个命令行工具，用来回答一个很具体的问题：刚�
 3. [第一次验证](#3-第一次验证)
 4. [两套证据通道](#4-两套证据通道)
 5. [退出码](#5-退出码)
-6. [换成你自己的板子](#6-换成你自己的板子)
+6. [固件怎么对接 flashgate](#6-固件怎么对接-flashgate)
 7. [功能探针](#7-功能探针)
 8. [Stop hook](#8-stop-hook)
 9. [MCP server](#9-mcp-server)
@@ -236,19 +236,227 @@ swd 通道的局限是没有功能探针，探针需要串口的双向能力。
 | 6 | 环境问题（ST-Link 没连、串口找不到、工具链缺失） |
 | 7 | 功能探针失败 |
 
-## 6. 换成你自己的板子
+## 6. 固件怎么对接 flashgate
 
-要做两件事：固件报告身份，加一份板卡档案。
+flashgate 对固件的要求分三档，做完第一档就能用启动验证，后面的按需加：
 
-固件侧。如果是走 uart 通道，开机时往串口打一行符合正则的 banner，
-格式参考 `examples/apollo-h743/BSP/Src/bsp_console.c`。git 版本不要
-手写，用构建时生成：示例工程的 `cmake/firmware_identity.cmake` 会在
-每次构建时重新生成一个头文件，保证版本串永远跟当前工作区一致（这比
-configure 时烙一次靠谱，commit 之后不重新 configure 也不会过期）。
-走 swd 通道的话照抄 `examples/apollo-h743/BSP/Src/bsp_signature.c`
-和链接脚本的 SIGRAM 段，把结构体放到一块合适的 RAM 的固定地址上。
+| 档 | 固件要做的事 | 解锁的能力 |
+|---|---|---|
+| 一 | 开机往串口打一行 banner | uart 启动验证 |
+| 二 | 往固定 RAM 地址写 64 字节签名 | swd 启动验证（免串口线） |
+| 三 | 串口行协议（查询/设置命令） | 功能探针 |
 
-板卡档案是一份 yaml，放 `boards/` 目录，一块板一份。完整字段：
+三档都只是在固件里加代码，不改现有逻辑，从哪一档开始都行。
+
+### 6.1 第一档：banner
+
+在 main 里、外设初始化完成之后、进 RTOS 或主循环之前，printf 一行：
+
+```c
+printf("\r\nFLASHGATE-BOOT board=%s git=%s build=%s\r\n",
+        "my-board", APP_GIT_SHA, APP_BUILD_ISO);
+```
+
+对这行字的要求只有三条：一行写完；开头和字段格式你自己定，但要用
+同样的格式写 yaml 里的 banner_regex；git 字段来自构建时烙进的版本，
+不要手写。串口怎么初始化的随便，printf 重定向、直接
+HAL_UART_Transmit 一个字符串、写寄存器，都行。
+
+版本宏的来源是整个对接里唯一有点讲究的部分：要在每次构建时重新
+生成，而不是写死，也不能只在 configure 时生成一次。原因：agent 的
+典型工作流是改代码、验证、再提交，版本如果在 configure 时烙一次，
+commit 之后不重新 configure 就会过期。CMake 工程：
+
+```cmake
+# CMakeLists.txt：每次构建都重新生成版本头
+add_custom_target(fw_version ALL
+    COMMAND ${CMAKE_COMMAND}
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DOUT_FILE=${CMAKE_BINARY_DIR}/fw_version.h
+            -P ${CMAKE_SOURCE_DIR}/cmake/gen_version.cmake
+    BYPRODUCTS ${CMAKE_BINARY_DIR}/fw_version.h
+)
+add_dependencies(your_elf fw_version)
+target_include_directories(your_elf PRIVATE ${CMAKE_BINARY_DIR})
+```
+
+```cmake
+# cmake/gen_version.cmake
+execute_process(COMMAND git rev-parse --short=7 HEAD
+    WORKING_DIRECTORY ${SOURCE_DIR} OUTPUT_VARIABLE sha
+    OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE r)
+if(NOT r EQUAL 0)
+    set(sha unknown)
+endif()
+execute_process(COMMAND git status --porcelain
+    WORKING_DIRECTORY ${SOURCE_DIR} OUTPUT_VARIABLE dirty
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT dirty STREQUAL "")
+    string(APPEND sha "-dirty")
+endif()
+string(TIMESTAMP iso "%Y-%m-%dT%H:%M:%SZ" UTC)
+file(WRITE "${OUT_FILE}"
+    "#define APP_GIT_SHA \"${sha}\"\n#define APP_BUILD_ISO \"${iso}\"\n")
+```
+
+Makefile 工程同理，两行 shell：
+
+```make
+fw_version.h:
+	@echo "#define APP_GIT_SHA \"$$(git rev-parse --short=7 HEAD)\"" > $@
+	@echo "#define APP_BUILD_ISO \"$$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >> $@
+```
+
+固件里 #include "fw_version.h"，配一个 __has_include 的兜底宏定义
+会更稳。
+
+这一档做完的验收：串口助手能看到那行字；写好 yaml 后
+flashgate verify --evidence uart 退出码 0。
+
+### 6.2 第二档：RAM 签名
+
+给没有串口线的场景用。固件在启动早期往一个固定地址写这 64 字节：
+
+```
+偏移  大小  字段
+0x00  4     magic，0xF1A5C0DE（注意：最终值参与 CRC）
+0x04  2     布局版本 = 1
+0x06  2     flags，bit0 = 串口已初始化，其余保留
+0x08  16    git 版本字符串，NUL 结尾
+0x18  24    构建时间，ISO 8601，NUL 结尾
+0x30  4     CRC32，覆盖 0x00-0x2F 共 48 字节，算法同 zlib.crc32
+0x34  12    保留，填零
+```
+
+参考实现，可移植 C：
+
+```c
+#include <stdint.h>
+#include <string.h>
+
+typedef struct {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t flags;
+    char     git[16];
+    char     build[24];
+    uint32_t crc32;
+    uint8_t  reserved[12];
+} flashgate_sig_t;            /* 应为 64 字节，建议 _Static_assert 确认 */
+
+static uint32_t sig_crc32(const uint8_t *p, uint32_t len)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < len; i++) {
+        crc ^= p[i];
+        for (int b = 0; b < 8; b++)
+            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+/* 放进链接脚本划出的固定段，见下面"地址怎么挑" */
+static volatile flashgate_sig_t g_flashgate_sig
+    __attribute__((section(".flashgate_sig"), used));
+
+void flashgate_publish(const char *git, const char *build, uint16_t flags)
+{
+    flashgate_sig_t s;
+    memset(&s, 0, sizeof s);
+    s.magic   = 0xF1A5C0DEu;
+    s.version = 1;
+    s.flags   = flags;
+    strncpy(s.git,   git,   sizeof s.git   - 1);
+    strncpy(s.build, build, sizeof s.build - 1);
+    s.crc32 = sig_crc32((const uint8_t *)&s, 48);
+    memcpy((void *)&g_flashgate_sig, &s, sizeof s);
+    __asm volatile ("dsb" ::: "memory");
+}
+```
+
+调用一行：flashgate_publish(APP_GIT_SHA, APP_BUILD_ISO, 1);
+放在 banner 之后即可。
+
+地址怎么挑，是这一档唯一需要动脑子的地方，四条规则：
+
+一，必须是 RAM。掉电会丢没关系，复位后固件会重写；恰恰要的是
+复位后内容还在，主机才能读到。
+
+二，地址必须固定。普通全局变量会被链接器挪来挪去，要在链接脚本里
+划一块专用段。做法是从某块 RAM 的尾部划，同时把该 RAM 的 LENGTH
+缩小相应的字节：
+
+```
+MEMORY
+{
+    RAM (xrw)  : ORIGIN = 0x20000000, LENGTH = 128K - 0x100
+    SIGRAM (rw): ORIGIN = 0x2001FF00, LENGTH = 0x100
+}
+SECTIONS
+{
+    .flashgate_sig (NOLOAD) :
+    {
+        KEEP(*(.flashgate_sig))
+    } > SIGRAM
+}
+```
+
+三，那块 RAM 必须不经缓存、调试口能直读。两个稳妥选择：核心本地
+RAM（Cortex-M 的 DTCM 之类，架构上不经过缓存）；或者用 MPU 把这
+256 字节配成强序非缓存。我们在一颗带 D-cache 的 M7 上踩过雷：放
+AXI SRAM 时固件自己读得到、调试口读到的是零，停核读也一样，换
+DTCM 解决。如果你的芯片没有这类内存，走 MPU 路线。
+
+四，别和栈、堆、DMA 缓冲区重叠，规则二的做法天然避开。
+
+验收：yaml 的 evidence.signature.address 填你挑的地址，
+flashgate verify --evidence swd 退出码 0。
+
+### 6.3 第三档：探针命令
+
+想验证"改的那个功能真的能用"，固件在串口上实现一个行协议。
+约定很少：
+
+- 收一行命令，回一行响应，以 \r\n 结尾
+- 成功的响应以 OK 开头，失败的以 ERR 开头
+- 命令和字段名你自己定，yaml 里配对
+
+协议骨架，轮询式，六十行上下：
+
+```c
+for (;;) {
+    if (uart_line_ready(line, sizeof line)) {
+        if (strcmp(line, "ping") == 0) {
+            printf("OK pong git=%s\r\n", APP_GIT_SHA);
+        } else if (strcmp(line, "led on") == 0) {
+            led_set(1);
+            printf("OK led state=%s\r\n", led_get() ? "on" : "off");
+        } else if (strcmp(line, "led?") == 0) {
+            printf("OK led state=%s duty=%lu\r\n",
+                   led_get() ? "on" : "off",
+                   (unsigned long)timer_ccr_read());
+        } else {
+            printf("ERR unknown-cmd\r\n");
+        }
+    }
+}
+```
+
+RTOS 工程里丢一个低优先级任务跑这个循环；裸机就挂在主循环里。
+
+两条设计经验，都来自实际踩坑：
+
+响应要报读回来的实际状态，不要回声请求。上面 led on 的响应里
+state 是再读一次硬件后的值。设置类命令静默失效是最难缠的一类
+bug，回声式响应永远发现不了，回读式第一步就露馅。
+
+查询类命令尽量报寄存器实际值。duty=%lu 那个字段是定时器 CCR
+寄存器的当前读数。寄存器不会说谎，这是能给的最硬的证据；固件
+自己"认为"的状态只能作参考。
+
+### 6.4 主机侧：板卡档案
+
+固件之外，写一份 yaml 描述这块板子，放 boards/。全部字段：
 
 ```yaml
 board: my-board
@@ -277,10 +485,10 @@ serial:
 evidence:
   mode: auto                 # uart / swd / auto
   signature:
-    address: "0x2001FF00"    # 签名地址，swd 通道用
+    address: "0x2001FF00"    # 6.2 里挑的地址
     size: 64
 
-probes:                      # 第 7 节讲
+probes:                      # 第 7 节
   ...
 
 gate:
@@ -288,13 +496,31 @@ gate:
 ```
 
 串口这块的思路是"板子只认 USART 引脚，USB 那头接什么是工作台的事"。
-端口解析按三层来：显式的 `port` 或环境变量 `FLASHGATE_SERIAL_PORT` 优先；
+端口解析按三层来：显式的 port 或环境变量 FLASHGATE_SERIAL_PORT 优先；
 没有就看 vid/pids 提示；再没有就数一下机器上有几个串口，只有一个就
-用它。选错了口不会误判通过，因为 banner 正则是最终判据，错口只会
-超时。今天用 CH340 明天换 CP2102，改一下提示就行。
+用它。选错了口不会误判通过，banner 正则是最终判据，错口只会超时。
 
-写好档案之后 `flashgate --board boards/my-board.yaml doctor` 先体检，
-再 verify。
+写好之后先 flashgate --board boards/my-board.yaml doctor，再 verify。
+
+### 6.5 对接清单
+
+最小对接（启动门）：
+
+- [ ] printf 一行 banner
+- [ ] 构建时生成版本头（git sha + 时间 + -dirty）
+- [ ] 板卡档案：构建命令、产物、flash 地址、串口、banner 正则
+- [ ] verify --evidence uart 退出码 0
+
+进阶：
+
+- [ ] 链接脚本划 SIGRAM，实现 flashgate_publish
+- [ ] 档案加 evidence.signature 地址，verify --evidence swd 退出码 0
+- [ ] 串口行协议（至少一个查询命令带寄存器读回）
+- [ ] 档案加 probes，verify --all-probes 退出码 0
+
+仓库里的 examples/apollo-h743 是三档全做完的实现，卡在哪一步可以翻
+它对应的部分：bsp_console.c（banner）、bsp_signature.c（签名）、
+app_console.c（行协议）。
 
 ## 7. 功能探针
 
@@ -367,8 +593,8 @@ hook 脚本先给固件工作区算指纹（HEAD 加完整 diff 加未跟踪文�
 编译、烧录、听板子说话、跑探针，全过才放行。
 
 拦不是无限拦。同一棵坏树最多拦两次，第三次放行，但会打一条明显的
-警告，说这次停止的固件没有经过硬件验证。这个设计抄自 coderio 的
-VerifyGate：门不能把会话卡死，也不能悄悄放过。
+警告，说这次停止的固件没有经过硬件验证。门不能把会话卡死，也
+不能悄悄放过，所以拦是有次数上限的。
 
 安装。项目级，写在固件工程的 `.claude/settings.json` 里，随仓库分发：
 
@@ -400,8 +626,7 @@ VerifyGate：门不能把会话卡死，也不能悄悄放过。
 Stop 事件下面应该挂着 flashgate 那条命令。装在用户级可以完全绕开
 这个问题。
 
-coderio 等实现了 Claude Code 兼容 hooks 契约的 harness 也能挂同一个
-脚本。
+其他实现了 Claude Code 兼容 hooks 契约的 harness 也能挂同一个脚本。
 
 ## 9. MCP server
 

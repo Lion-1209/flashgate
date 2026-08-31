@@ -63,8 +63,8 @@ fresh clone verifies out of the box once wired up.
 
 ## The Stop hook
 
-`hooks/flashgate_stop.py` is a Claude Code Stop hook (any compatible
-harness works, coderio included). When the agent tries to finish after
+`hooks/flashgate_stop.py` is a Claude Code Stop hook (any harness
+implementing the same hook contract works). When the agent tries to finish after
 touching watched firmware files, the hook fingerprints the tree and allows
 instantly if that exact state already passed hardware verify (~0.7 s
 cached). Otherwise it runs the full verify on the real board and blocks
@@ -108,8 +108,9 @@ serial adapter hints, banner regex, probes, watch globs. The console-side
 USB adapter is a property of your bench, not the board — port resolution
 goes explicit `serial.port` / `FLASHGATE_SERIAL_PORT`, then VID/PID hint,
 then the sole serial port, with the banner regex as the final identity
-proof. See the [guide](docs/GUIDE.md#6-换成你自己的板子) for the full
-field reference and the firmware-side recipe.
+proof. See the [guide](docs/GUIDE.md#6-固件怎么对接-flashgate) for the
+firmware-side integration recipe (three levels, with code) and the
+full profile field reference.
 
 ## Status
 
