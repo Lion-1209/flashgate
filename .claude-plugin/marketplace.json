@@ -1,0 +1,13 @@
+{
+  "name": "flashgate",
+  "owner": {
+    "name": "Lion-1209"
+  },
+  "plugins": [
+    {
+      "name": "flashgate",
+      "source": "./",
+      "description": "Hardware-in-the-loop verification gate for firmware agents: build → flash → boot evidence → probes, enforced by a Stop hook."
+    }
+  ]
+}

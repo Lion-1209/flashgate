@@ -1,0 +1,5 @@
+{
+  "name": "flashgate",
+  "description": "Hardware-in-the-loop verification gate: the agent can't claim firmware works until the board says so. Stop hook runs build → flash → boot evidence → probes on real hardware and blocks unverified 'done' claims.",
+  "version": "0.3.0"
+}

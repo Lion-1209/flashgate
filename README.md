@@ -81,6 +81,27 @@ The same broken tree is blocked at most twice, then released with a loud
 warning — the session can never wedge, and a failure is never silently
 swallowed.
 
+## Install as a Claude Code plugin
+
+The repo doubles as a Claude Code plugin: the Stop hook, an MCP server,
+a board-integration skill and /flashgate commands, all at once:
+
+```
+pip install git+https://github.com/Lion-1209/flashgate        # CLI + hook runtime
+pip install "flashgate[mcp] @ git+https://github.com/Lion-1209/flashgate"  # + MCP
+```
+
+Then inside Claude Code:
+
+```
+/plugin marketplace add Lion-1209/flashgate
+/plugin install flashgate@flashgate
+```
+
+The hook needs to know your board profile: set `FLASHGATE_BOARD` to your
+board yaml (or a repo `boards/` default is used when present). Without a
+profile the gate stays idle and says so.
+
 ## MCP server
 
 ```json

@@ -32,13 +32,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from flashgate import gatestate                      # noqa: E402
-from flashgate.board import BoardError, load_board   # noqa: E402
+from flashgate.board import BoardError, default_board_path, load_board  # noqa: E402
 
 VERIFY_TIMEOUT_S = 480
 
 
 def emit(msg: str) -> None:
     print(msg, file=sys.stderr)
+
+
+def resolve_board_arg(board_arg: str | None) -> str | None:
+    """Board profile: explicit arg > FLASHGATE_BOARD env > repo default."""
+    source = board_arg or __import__("os").environ.get("FLASHGATE_BOARD")
+    if source:
+        return source
+    default = default_board_path()
+    return str(default) if default else None
 
 
 def run_verify(board_arg: str) -> tuple[int, str]:
@@ -57,7 +66,8 @@ def run_verify(board_arg: str) -> tuple[int, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--board", required=True, help="board profile yaml")
+    parser.add_argument("--board", default=None,
+                        help="board profile yaml (default: $FLASHGATE_BOARD, then repo default)")
     args = parser.parse_args()
 
     try:
@@ -69,8 +79,13 @@ def main() -> int:
     if payload.get("stop_hook_active"):
         return 0            # already continuing because of a Stop hook: never loop
 
+    board_arg = resolve_board_arg(args.board)
+    if board_arg is None:
+        emit("[flashgate] no board profile: set --board or $FLASHGATE_BOARD. "
+             "Gate idle for this session.")
+        return 0
     try:
-        board = load_board(Path(args.board))
+        board = load_board(Path(board_arg))
     except BoardError as exc:
         emit(f"[flashgate] gate misconfigured, allowing stop: {exc}")
         return 0            # a broken gate must not wedge the session
@@ -87,7 +102,7 @@ def main() -> int:
 
     emit(f"[flashgate] watched firmware changed ({len(watched)} file(s), "
          f"e.g. {watched[0]}) — running hardware verify...")
-    rc, output = run_verify(args.board)
+    rc, output = run_verify(board_arg)
 
     if rc == 0:
         gatestate.save_state(fw_dir, verified_fingerprint=fingerprint,
@@ -110,7 +125,7 @@ def main() -> int:
                          consecutive_blocks=blocks)
     emit(f"[flashgate] BLOCKED (attempt {blocks}/{gatestate.MAX_CONSECUTIVE_BLOCKS}): "
          f"firmware changes are not verified on hardware (verify rc={rc}).")
-    emit(f"[flashgate] Run `flashgate --board {args.board} verify --all-probes`, "
+    emit(f"[flashgate] Run `flashgate --board {board_arg} verify --all-probes`, "
          f"fix the firmware until it exits 0, then finish.")
     if tail:
         emit(f"[flashgate] last verify output:\n{tail}")
