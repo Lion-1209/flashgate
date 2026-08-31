@@ -158,7 +158,9 @@ One yaml per board under `boards/`. Everything the gate needs is
 declarative — build command, artifact, flash address, console adapter
 hints, banner regex, probes, watch globs. First profile:
 `boards/apollo-h743.yaml` (ALIENTEK Apollo STM32H743 core board; console on
-the USART1 header via any USB-TTL adapter). Note: on this board the RGB LCD
+the USART1 header via any USB-TTL adapter) — **complete buildable example
+firmware included under `examples/apollo-h743/`**, Stop hook pre-wired
+with repo-relative paths. Note: on this board the RGB LCD
 is hardware-mutually-exclusive with the console (LTDC_B1 shares PA10 with
 USART1_RX).
 

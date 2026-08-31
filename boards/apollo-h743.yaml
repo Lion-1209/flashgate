@@ -9,8 +9,8 @@ mcu: STM32H743IIT6
 description: ALIENTEK Apollo core board, console on USART1 header via external USB-TTL adapter
 
 firmware:
-  dir: ../../apollo                   # relative to this yaml file
-  configure: cmake --preset Debug    # run once when build/ is missing
+  dir: ../examples/apollo-h743      # in-repo example firmware (relative to this yaml)
+  configure: cmake --preset Debug   # run once when build/ is missing
   build: ninja -C build/Debug
   artifact: build/Debug/Apollo.bin
 

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ../../hooks/flashgate_stop.py --board ../../boards/apollo-h743.yaml",
+            "timeout": 600
+          }
+        ]
+      }
+    ]
+  }
+}

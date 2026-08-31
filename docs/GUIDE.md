@@ -82,10 +82,10 @@ pip install -e ".[mcp]"         # 可选：MCP server
    确保在 PATH 里
 3. **固件工程自带**——若固件仓库有自己的构建脚本，在板卡档案里直接写命令即可
 
-**被验证固件的要求**（详见[第 6 节](#6-给你自己的板子写档案)）：
+**被验证固件的要求**（详见[第 6 节](#6-给你自己的板子写档案)；完整参考实现在仓内示例 `examples/apollo-h743/`）：
 - 可用命令行构建出 `.bin`
 - 固件启动后发布"证据"：串口打一行 banner（uart 通道），或往固定 RAM 地址
-  写签名（swd 通道，参考 apollo 仓库的 `BSP/Src/bsp_signature.c`）
+  写签名（swd 通道，参考 `examples/apollo-h743/BSP/Src/bsp_signature.c`）
 
 ## 4. 五分钟跑通第一次验证
 
@@ -203,10 +203,10 @@ gate:
 环境变量 `FLASHGATE_SERIAL_PORT` > VID/PID 提示 > 机器上唯一串口兜底。
 banner 正则是最终身份判据——选错口只会超时，不会误判通过。
 
-**固件侧要做的两件事**（参考 apollo 仓库）：
+**固件侧要做的两件事**（参考仓内示例 `examples/apollo-h743/`，含完整可构建工程）：
 1. banner：开机第一行 printf 一个固定格式、含 git sha 的字符串（sha 在构建时
-   注入，参考 `cmake/firmware_identity.cmake` 的 build-time 生成方案）
-2. （可选，swd 通道）签名：参考 `BSP/Src/bsp_signature.c` 与链接脚本的
+   注入，参考 `examples/apollo-h743/cmake/firmware_identity.cmake` 的 build-time 生成方案）
+2. （可选，swd 通道）签名：参考 `examples/apollo-h743/BSP/Src/bsp_signature.c` 与链接脚本的
    SIGRAM 保留段
 
 ## 7. 功能探针
