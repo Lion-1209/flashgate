@@ -9,5 +9,6 @@
       "source": "./",
       "description": "Hardware-in-the-loop verification gate for firmware agents: build → flash → boot evidence → probes, enforced by a Stop hook."
     }
-  ]
+  ],
+  "description": "Marketplace for flashgate — hardware-in-the-loop verification for firmware agents."
 }
