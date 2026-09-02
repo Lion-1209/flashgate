@@ -257,9 +257,10 @@ printf("\r\nFLASHGATE-BOOT board=%s git=%s build=%s\r\n",
         "my-board", APP_GIT_SHA, APP_BUILD_ISO);
 ```
 
-对这行字的要求只有三条：一行写完；开头和字段格式你自己定，但要用
-同样的格式写 yaml 里的 banner_regex；git 字段来自构建时烙进的版本，
-不要手写。串口怎么初始化的随便，printf 重定向、直接
+对这行字的要求只有三条：一行写完；开头和字段格式你自己定，但 yaml 里
+的 banner 要按同样的格式写——把固件 printf 里数值出现的位置换成
+`{名字}`，两行互为镜像（见下面 6.4 的例子）；git 字段来自构建时烙进
+的版本，不要手写。串口怎么初始化的随便，printf 重定向、直接
 HAL_UART_Transmit 一个字符串、写寄存器，都行。
 
 版本宏的来源是整个对接里唯一有点讲究的部分：要在每次构建时重新
@@ -586,12 +587,13 @@ led_set 和 led_get 是你工程里本来就有的东西，没有就补两个最
 你的命令里能摸到什么寄存器就报什么。
 
 **固件代码和 yaml 探针的对应关系。** 这是两边的接缝，看清楚就
-全通了。固件里打印什么字符串，yaml 里就用对应的字符串去接：
+全通了。expect 不是正则，是固件那行 printf 的镜像：固件打印什么
+字符串，expect 就照抄什么字符串，把数值的位置换成 `{名字}`——
 
 ```
 固件代码                          yaml 探针
 strcmp(line, "led on")       ↔   send: "led on"
-reply("OK led state=%s",...) ↔   expect: '^OK led state=(on|off)$'
+reply("OK led state=%s",...) ↔   expect: "OK led state={state}"
 ```
 
 配套的探针长这样，跟第 7.2 节的例子同一套写法：
@@ -601,11 +603,16 @@ probes:
   led:
     steps:
       - send: "led on"
-        expect: '^OK led state=on$'
+        expect: "OK led state=on"
       - send: "led?"
-        expect: '^OK led state=(?P<state>\S+) duty=(?P<duty>\d+)$'
+        expect: "OK led state={state} duty={duty:d}"
         assert: "state == on and duty > 0"
 ```
+
+`{state}` 抓一个词，`{duty:d}` 要求这位置必须是纯数字。expect 里
+没有花括号的（`OK led state=on`）意思就是"板子必须一字不差回这句"。
+真遇到刁钻格式想用正则，写成斜杠包起来（`/^OK .+$/`）也行，但正常
+情况用不到。
 
 固件侧不需要知道探针的存在，两边唯一的耦合就是这些字符串。
 
@@ -637,7 +644,7 @@ serial:
   vid: 0x1A86                # USB 转 TTL 芯片的 USB 提示
   pids: [0x7523, 0x5523]
   baudrate: 115200
-  banner_regex: 'FLASHGATE-BOOT board=(?P<board>\S+) git=(?P<git>\S+) build=(?P<build>\S+)'
+  banner: 'FLASHGATE-BOOT board={board} git={git} build={build}'
   banner_timeout_s: 15
   error_patterns: ["HardFault", "Assertion"]
 
@@ -657,7 +664,7 @@ gate:
 串口这块的思路是"板子只认 USART 引脚，USB 那头接什么是工作台的事"。
 端口解析按三层来：显式的 port 或环境变量 FLASHGATE_SERIAL_PORT 优先；
 没有就看 vid/pids 提示；再没有就数一下机器上有几个串口，只有一个就
-用它。选错了口不会误判通过，banner 正则是最终判据，错口只会超时。
+用它。选错了口不会误判通过，banner 匹配是最终判据，错口只会超时。
 
 写好之后先 flashgate --board boards/my-board.yaml doctor，再 verify。
 
@@ -667,7 +674,7 @@ gate:
 
 - [ ] printf 一行 banner
 - [ ] 构建时生成版本头（git sha + 时间 + -dirty）
-- [ ] 板卡档案：构建命令、产物、flash 地址、串口、banner 正则
+- [ ] 板卡档案：构建命令、产物、flash 地址、串口、banner 模板
 - [ ] verify --evidence uart 退出码 0
 
 进阶：
@@ -712,11 +719,15 @@ probes:
     step_timeout_s: 3
     steps:
       - send: "led0 breath"
-        expect: '^OK led0 state=BREATH$'
+        expect: "OK led0 state=BREATH"
       - send: "led0?"
-        expect: '^OK led0 state=(?P<state>\S+) ccr=(?P<ccr>\d+)$'
+        expect: "OK led0 state={state} ccr={ccr:d}"
         assert: "state == BREATH and ccr <= 1000"
 ```
+
+expect 是固件 printf 的镜像：固件回 `OK led0 state=BREATH ccr=691`，
+expect 就写成 `OK led0 state={state} ccr={ccr:d}`——两个花括号的位置
+是会变的数，其余每个字符都要对上。
 
 flashgate verify --all-probes 跑到探针阶段时，串口线上实际发生的
 事。每一步都是两句：电脑发一句，板子回一句。
@@ -730,7 +741,7 @@ flashgate verify --all-probes 跑到探针阶段时，串口线上实际发生�
 
 固件收到后把 LED0 设成呼吸态，再读一次实际状态，把读到的填进响应。
 flashgate 发完就计时，等一行能匹配 expect 的响应。板子回了上面
-那行，正则 '^OK led0 state=BREATH$' 匹配，第一步过。
+那行，`OK led0 state=BREATH` 一字不差，第一步过。
 
 第二步：
 
@@ -739,9 +750,9 @@ flashgate 发完就计时，等一行能匹配 expect 的响应。板子回了�
 板子 -> 电脑:  OK led0 state=BREATH ccr=691\r\n
 ```
 
-这步的 expect 里有两个命名组：(?P<state>\S+) 从响应里抓到
-"BREATH"，(?P<ccr>\d+) 抓到 "691"。匹配成功后，assert 对这两个
-值做检查：state == BREATH 成立，ccr <= 1000 成立，第二步过。
+这步的 expect 里有两个花括号：{state} 从响应里抓到 "BREATH"，
+{ccr:d} 抓到 "691"（:d 要求这个位置是纯数字）。匹配成功后，assert
+对这两个值做检查：state == BREATH 成立，ccr <= 1000 成立，第二步过。
 
 两步都过，这个探针通过；全部探针都通过，verify 的退出码才是 0。
 上面整个对话两三秒跑完。
@@ -749,6 +760,30 @@ flashgate 发完就计时，等一行能匹配 expect 的响应。板子回了�
 值得再点一次 ccr=691 是什么：固件收到 led0? 后，从 TIM3 的 CCR
 寄存器里读出当前值填进响应。flashgate 检查的是寄存器读回值，不是
 固件自称的状态。这就是探针能抓"固件以为自己对"这类问题的原因。
+
+**换一个功能也一样：电池电压。** 上面 LED 带状态机、带设置回读，
+是探针里最重的形态。多数功能是只读的，探针更短。假设固件里有
+电池电压检测，`battery_get_mv()` 这个函数本来就有，固件侧加三行：
+
+```c
+if (strcmp(line, "bat?") == 0) {
+    reply("OK bat mv=%d", battery_get_mv());   /* 报实测值 */
+    return;
+}
+```
+
+yaml 侧三行：
+
+```yaml
+- send: "bat?"
+  expect: "OK bat mv={mv:d}"
+  assert: "mv > 3000 and mv < 4200"     # 单节锂电的合理区间
+```
+
+固件的 `mv=%d` 换成 yaml 的 `mv={mv:d}`，这就是全部对接。它抓的
+是这类事故：agent 改坏了 ADC 配置（通道、采样时间、参考电压），
+`battery_get_mv()` 返回 0 或离谱值，断言不过，agent 被拦下。电压
+这种会漂的量，断言写范围不写定值——这也是 7.6 节的原则。
 
 ### 7.3 失败的三种样子
 
@@ -768,7 +803,7 @@ expect 的行就超时。报文会带上最后收到的那行，方便对比差�
 ```
 电脑 -> 板子:  led0 breath\r\n
 板子 -> 电脑:  OK led0 state=OFF\r\n
-[probe] FAIL — timeout waiting for /^OK led0 state=BREATH$/ after
+[probe] FAIL — timeout waiting for /OK led0 state=BREATH/ after
            'led0 breath' (step 1), last response: 'OK led0 state=OFF'
 ```
 
@@ -792,13 +827,15 @@ expect 的行就超时。报文会带上最后收到的那行，方便对比差�
 | step_timeout_s | 每一步等响应的秒数，默认 3 |
 | steps | 步骤列表，按顺序执行 |
 | send | 这一步发给固件的一行，不带换行符，flashgate 自己加 \r\n |
-| expect | 对固件响应一行的正则；匹配对象是去掉 \r\n 后的整行 |
-| assert | 对 expect 命名组的断言，可省略 |
+| expect | 固件响应一行的"样张"：照抄 printf，数值位置写 {名字}；匹配对象是去掉 \r\n 后的整行 |
+| assert | 对 expect 花括号抓到的值的断言，可省略 |
 
-expect 用 Python 正则，^ 和 $ 锚的是这一行的头尾。响应里固件想带
-多少字段都行，你用命名组挑要检查的，剩下的忽略。
+expect 是模板不是正则。三种写法：带花括号的（`OK bat mv={mv}`），
+`{名字}` 抓一段非空白字符，`{名字:d}` 要求纯数字；纯文本的
+（`OK demo on`）要求整行一字不差；实在要正则时用斜杠包起来
+（`/^OK .+$/`）。老档案里写的命名分组正则也继续认。
 
-assert 只能引用 expect 里抓到的命名组。操作符 == != > < >= <=，
+assert 只能引用 expect 里花括号抓到的名字。操作符 == != > < >= <=，
 值是数字就按数字比，多个条件用 and 连接。没有 or，没有算术，
 这个求值器是手写的几十行代码，不走 eval，探针文件是数据不是代码。
 
@@ -904,7 +941,7 @@ USB，我们遇到过一次软件手段救不回来的，物理拔插立即好�
 一次，正常情况下你只会看到一条黄色提示然后编译就过了。
 
 verify 返回 3 但板子明显启动了。uart 通道的话检查 banner 格式是不是
-跟 banner_regex 一致，固件侧改了 banner 格式就得同步改档案。swd
+跟档案里的 banner 模板一致，固件侧改了 banner 格式就得同步改档案。swd
 通道检查固件有没有真的调 bsp_signature_publish，以及地址跟档案
 signature.address 是否一致。
 

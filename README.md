@@ -30,7 +30,13 @@ FLASHGATE-BOOT board=apollo-h743 git=2c58bd3 build=2026-08-28T07:26:35Z rtos=Fre
 Both carry the git sha plus `-dirty` when the tree differs from HEAD, so a
 passing verify proves the board is running exactly the code you're looking
 at. Functional probes then send real commands and assert on the answers,
-including register readbacks (TIM3 CCR), not firmware self-reports.
+including register readbacks (TIM3 CCR), not firmware self-reports:
+
+```yaml
+- send: "led0?"
+  expect: "OK led0 state={state} ccr={ccr:d}"   # mirror of the firmware's printf
+  assert: "state == BREATH and ccr <= 1000"
+```
 
 ## Quick start
 
@@ -125,10 +131,10 @@ sides, and passing on hardware ([24 MB GIF, release asset](https://github.com/Li
 ## Board profiles
 
 One yaml per board (`boards/`): build command, artifact, flash address,
-serial adapter hints, banner regex, probes, watch globs. The console-side
+serial adapter hints, banner template, probes, watch globs. The console-side
 USB adapter is a property of your bench, not the board — port resolution
 goes explicit `serial.port` / `FLASHGATE_SERIAL_PORT`, then VID/PID hint,
-then the sole serial port, with the banner regex as the final identity
+then the sole serial port, with the banner match as the final identity
 proof. See the [guide](docs/GUIDE.md#6-固件怎么对接-flashgate) for the
 firmware-side integration recipe (three levels, with code) and the
 full profile field reference.

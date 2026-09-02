@@ -4,7 +4,49 @@ from pathlib import Path
 
 import pytest
 
-from flashgate.probes import ProbeError, eval_assert, load_probes
+from flashgate.probes import (
+    ProbeError,
+    compile_pattern,
+    eval_assert,
+    load_probes,
+)
+
+
+class TestCompilePattern:
+    def test_template_captures_value(self):
+        m = compile_pattern("OK bat mv={mv}").search("OK bat mv=3300")
+        assert m and m.group("mv") == "3300"
+
+    def test_template_digits_type(self):
+        pat = compile_pattern("OK bat mv={mv:d}")
+        assert pat.search("OK bat mv=3300")
+        assert pat.search("OK bat mv=-") is None       # dash is not a digit
+
+    def test_plain_text_is_exact_line(self):
+        pat = compile_pattern("OK demo on")
+        assert pat.search("OK demo on")
+        assert pat.search("OK demo on extra") is None
+        assert pat.search("prefix OK demo on") is None
+
+    def test_template_escapes_regex_chars(self):
+        pat = compile_pattern("OK bat (pack1) mv={mv:d}")
+        assert pat.search("OK bat (pack1) mv=4100")
+        assert pat.search("OK bat pack1 mv=4100") is None
+
+    def test_slash_form_is_raw_regex(self):
+        pat = compile_pattern("/^OK led\\d .+$/")
+        assert pat.search("OK led0 whatever")
+
+    def test_legacy_named_group_passthrough(self):
+        pat = compile_pattern(r"^OK led0 state=(?P<state>\S+)$")
+        m = pat.search("OK led0 state=BREATH")
+        assert m and m.group("state") == "BREATH"
+
+    def test_unanchored_matches_inside_transcript(self):
+        # banner scenario: the line arrives after \r\n, unanchored search
+        pat = compile_pattern("BOOT board={board} git={git}", anchor=False)
+        m = pat.search("\r\nnoise\r\nBOOT board=b1 git=abc1234 rtos=FreeRTOS\r\n")
+        assert m and m.group("board") == "b1" and m.group("git") == "abc1234"
 
 
 class TestEvalAssert:
@@ -57,6 +99,21 @@ probes:
         assert len(probe.steps) == 2
         assert probe.steps[0].assert_expr is None
         assert probe.steps[1].assert_expr == "state == BREATH and ccr <= 1000"
+
+    def test_template_syntax_parses_like_legacy(self, tmp_path):
+        p = self._yaml(tmp_path, """
+probes:
+  led-demo:
+    steps:
+      - send: "led0?"
+        expect: "OK led0 state={state} ccr={ccr:d}"
+        assert: "state == BREATH and ccr <= 1000"
+""")
+        step = load_probes(p)["led-demo"].steps[0]
+        legacy = compile_pattern(r"^OK led0 state=(?P<state>\S+) ccr=(?P<ccr>\d+)$")
+        modern = compile_pattern(step.expect)
+        line = "OK led0 state=BREATH ccr=691"
+        assert modern.search(line).groupdict() == legacy.search(line).groupdict()
 
     def test_no_probes_section(self, tmp_path):
         p = self._yaml(tmp_path, "board: x\n")

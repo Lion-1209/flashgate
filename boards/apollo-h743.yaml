@@ -23,30 +23,31 @@ serial:
   vid: 0x1A86                        # detection HINT: CH340/CH341 adapters
   pids: [0x7523, 0x5523]
   baudrate: 115200
-  banner_regex: 'FLASHGATE-BOOT board=(?P<board>\S+) git=(?P<git>\S+) build=(?P<build>\S+) rtos=(?P<rtos>\S+)'
+  banner: 'FLASHGATE-BOOT board={board} git={git} build={build} rtos={rtos}'
   banner_timeout_s: 15
   error_patterns: ["HardFault", "Assertion", "assert_param"]
 
 # Functional probes (M2): claim-proportional verification over the console
 # protocol. led0 set + readback proves the state machine took the command;
 # ccr readback is the TIM3 hardware register, not a firmware opinion.
+# expect is a printf mirror: {name} captures a value, {name:d} digits only.
 probes:
   led-demo:
     description: LED state-machine set/readback + PWM CCR sanity
     step_timeout_s: 3
     steps:
       - send: "led0 breath"
-        expect: '^OK led0 state=BREATH$'
+        expect: "OK led0 state=BREATH"
       - send: "led0?"
-        expect: '^OK led0 state=(?P<state>\S+) ccr=(?P<ccr>\d+)$'
+        expect: "OK led0 state={state} ccr={ccr:d}"
         assert: "state == BREATH and ccr <= 1000"
       - send: "led1?"
-        expect: '^OK led1 state=(?P<state>\S+) ccr=(?P<ccr>\d+)$'
+        expect: "OK led1 state={state} ccr={ccr:d}"
         assert: "state == BREATH"
       - send: "ping"
-        expect: '^OK pong git=(?P<git>\S+) build=(?P<build>\S+)$'
+        expect: "OK pong git={git} build={build}"
       - send: "demo on"
-        expect: '^OK demo on$'
+        expect: "OK demo on"
 
 # Boot evidence channel: uart (banner over console) | swd (fixed-address RAM
 # signature read via ST-Link, no serial cable needed) | auto (uart preferred,

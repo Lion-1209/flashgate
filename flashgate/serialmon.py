@@ -73,7 +73,9 @@ def wait_on(
     echo: bool = True,
 ) -> BannerResult:
     """Read from an open connection until banner / error pattern / timeout."""
-    pattern = re.compile(banner_regex)
+    from .probes import compile_pattern
+
+    pattern = compile_pattern(banner_regex, anchor=False)
     deadline = time.monotonic() + timeout_s
     transcript = ""
 

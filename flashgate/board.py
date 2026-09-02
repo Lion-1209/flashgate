@@ -76,6 +76,9 @@ def load_board(yaml_path: Path) -> Board:
     base = yaml_path.parent
     ev = raw.get("evidence") or {}
     sig = ev.get("signature") or {}
+    banner = str(ser.get("banner") or ser.get("banner_regex") or "")
+    if not banner:
+        raise BoardError(f"board profile {yaml_path.name} missing key: 'banner'")
     try:
         board = Board(
             name=raw["board"],
@@ -91,7 +94,7 @@ def load_board(yaml_path: Path) -> Board:
             usb_vid=int(str(ser.get("vid", "0x1A86")), 0),
             usb_pids=tuple(int(str(p), 0) for p in ser.get("pids", [])),
             baudrate=int(ser.get("baudrate", 115200)),
-            banner_regex=ser["banner_regex"],
+            banner_regex=banner,
             banner_timeout_s=float(ser.get("banner_timeout_s", 15)),
             error_patterns=tuple(ser.get("error_patterns", [])),
             watch_globs=tuple((raw.get("gate") or {}).get("watch", DEFAULT_WATCH)),

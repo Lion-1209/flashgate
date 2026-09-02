@@ -39,7 +39,8 @@ GUIDE 6.1. Add `-dirty` to the sha when `git status --porcelain` is
 non-empty.
 
 Host: board profile yaml with firmware dir/build/artifact, flash connect
-and address, serial params, and `banner_regex` matching the line above.
+and address, serial params, and `banner` mirroring the printf above
+(values as `{name}` placeholders).
 
 Acceptance: `flashgate verify --evidence uart` exits 0.
 
@@ -72,10 +73,12 @@ Firmware: line protocol over the console — one command in, one line out,
 Complete polling/ISR receive code, dispatch loop, and the
 firmware-string ↔ yaml-string mapping: GUIDE 6.3.
 
-Host: `probes:` in the profile — steps of `send` / `expect` (regex over
-one response line) / `assert` (over named capture groups, `and` only).
-Assert deterministic quantities (state, ranges), never instantaneous
-values.
+Host: `probes:` in the profile — steps of `send` / `expect` / `assert`.
+`expect` is a printf mirror of the firmware's response line (`{name}`
+captures a value, `{name:d}` digits only; plain text must match verbatim;
+slash-wrapped `/…/` for rare raw-regex needs). `assert` references the
+captured names, `and` only. Assert deterministic quantities (state,
+ranges), never instantaneous values.
 
 Acceptance: `flashgate verify --all-probes` exits 0; sabotage a setter
 with an early `return` and confirm the probe catches it (exit 7).
@@ -87,4 +90,5 @@ with an early `return` and confirm the probe catches it (exit 7).
   if persistent.
 - `cube-cmake not found`: a VSCode STM32 extension reconfigured the
   project; flashgate self-heals on the next build.
-- Banner format changed on one side only → exit 3 with the regex shown.
+- Banner format changed on one side only → exit 3 with the expected
+  template shown.

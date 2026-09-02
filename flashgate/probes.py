@@ -11,9 +11,46 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import serial
 import yaml
+
+# Response template: "OK bat mv={mv}" mirrors the firmware's printf format,
+# with {name} where a value appears and {name:d} when it must be digits.
+_PLACEHOLDER = re.compile(r"\{(\w+)(?::(d))?\}")
+
+
+@lru_cache(maxsize=None)
+def compile_pattern(expect: str, anchor: bool = True) -> re.Pattern[str]:
+    """Compile an expect string into a line-matching pattern.
+
+    Three accepted forms, commonest first:
+      "OK bat mv={mv}"   printf mirror: {mv} captures \\S+, {mv:d} captures digits
+      "OK demo on"       the line must equal this, verbatim
+      "/^OK .* on$/"     slash-delimited raw regex (escape hatch)
+
+    Strings that already look like regex (legacy profiles: named groups,
+    ^/$ anchors) pass through unchanged, so old yaml keeps working.
+
+    anchor=True pins the template to the full line (probe steps match one
+    line at a time); anchor=False leaves it free-floating (the banner is
+    searched in a streaming transcript where \\r\\n precedes it).
+    """
+    if len(expect) > 1 and expect.startswith("/") and expect.endswith("/"):
+        return re.compile(expect[1:-1])
+    if "(?P<" in expect or expect.startswith("^") or expect.endswith("$"):
+        return re.compile(expect)
+    parts = []
+    pos = 0
+    for m in _PLACEHOLDER.finditer(expect):
+        parts.append(re.escape(expect[pos:m.start()]))
+        sub = "\\d+" if m.group(2) == "d" else "\\S+"
+        parts.append(f"(?P<{m.group(1)}>{sub})")
+        pos = m.end()
+    parts.append(re.escape(expect[pos:]))
+    body = "".join(parts)
+    return re.compile(f"^{body}$" if anchor else body)
 
 
 @dataclass
@@ -114,7 +151,7 @@ def run_probe(conn: serial.Serial, probe: Probe, echo: bool = True) -> ProbeResu
                     if line.startswith("ERR"):
                         return ProbeResult(False, idx,
                                            f"firmware error: {line!r} at step {idx + 1}")
-                    m = re.search(step.expect, line)
+                    m = compile_pattern(step.expect).search(line)
                     if m:
                         groups = m.groupdict()
                         if step.assert_expr and not eval_assert(step.assert_expr, groups):

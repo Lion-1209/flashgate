@@ -49,6 +49,20 @@ class TestLoadBoard:
         with pytest.raises(BoardError):
             load_board(make_profile(tmp_path, body))
 
+    def test_missing_banner_rejected(self, tmp_path):
+        body = BODY.replace(
+            "  banner_regex: 'BOOT git=(?P<git>\\S+)'\n", "")
+        import pytest
+        with pytest.raises(BoardError):
+            load_board(make_profile(tmp_path, body))
+
+    def test_banner_template_key(self, tmp_path):
+        body = BODY.replace(
+            "  banner_regex: 'BOOT git=(?P<git>\\S+)'\n",
+            "  banner: 'BOOT git={git}'\n")
+        b = load_board(make_profile(tmp_path, body))
+        assert b.banner_regex == "BOOT git={git}"
+
 
 class TestHeadSha:
     def test_clean_then_dirty(self, tmp_path, git_repo):
