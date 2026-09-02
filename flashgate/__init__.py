@@ -5,4 +5,9 @@ says so: build -> flash -> boot banner over serial, with exit codes
 that an agent harness (Stop hook) can enforce.
 """
 
-__version__ = "0.3.0"
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+try:
+    __version__ = _pkg_version("flashgate")   # pyproject.toml is the single source
+except PackageNotFoundError:                  # running from a raw source tree
+    __version__ = "0.0.0"
