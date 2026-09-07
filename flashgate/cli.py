@@ -260,8 +260,10 @@ def cmd_verify(board: Board, probe_names: list[str] | None, evidence: str | None
 
 def _verify_swd(board: Board, probe_names: list[str] | None) -> int:
     """Boot gate through the ST-Link alone: fixed-address RAM signature.
-    No serial cable needed; functional probes are skipped (they need the
-    console) unless a probe run is explicitly requested and a port exists."""
+    No serial cable needed. Probes explicitly requested via --probe /
+    --all-probes (as the Stop hook does) MUST run: if the console is
+    missing or unusable, verify FAILS (exit 6) — a check that didn't
+    happen must never count as a pass."""
     print(_cyan(f"[verify] {board.name}: build -> flash -> SWD signature"))
     rc = _build(board)
     if rc != EXIT_OK:
@@ -287,6 +289,9 @@ def _verify_swd(board: Board, probe_names: list[str] | None) -> int:
         board.flash_connect, board.sig_address, board.sig_size,
         timeout_s=board.banner_timeout_s)
     if info is None:
+        if "not supported" in err:
+            print(_red(f"[verify] SIGNATURE LAYOUT MISMATCH: {err}"))
+            return EXIT_ENV
         print(_red(f"[verify] TIMEOUT: board never published its SWD signature ({err})"))
         return EXIT_BANNER_TIMEOUT
 
@@ -300,24 +305,44 @@ def _verify_swd(board: Board, probe_names: list[str] | None) -> int:
         return EXIT_SHA_MISMATCH
 
     if probe_names is not None:
-        port, _ = _console_port(board)
+        port, why = _console_port(board)
         if port is None:
-            print(_yellow("[verify] probes skipped: no console serial in swd mode"))
-        else:
-            try:
-                conn = serialmon.open_flush(port, board.baudrate)
-            except serial.SerialException as exc:
-                print(_yellow(f"[verify] probes skipped: cannot open {port} ({exc})"))
-                return EXIT_OK
-            try:
-                return _run_probes(board, None if probe_names == ["all"] else probe_names, conn)
-            finally:
-                conn.close()
-        return EXIT_OK
+            print(_red("[verify] probes were explicitly requested but no console serial "
+                       f"is available ({why}) — failing rather than passing unverified "
+                       "(drop --probe/--all-probes, or connect the console UART)"))
+            return EXIT_ENV
+        try:
+            conn = serialmon.open_flush(port, board.baudrate)
+        except serial.SerialException as exc:
+            print(_red(f"[verify] probes were explicitly requested but {port} cannot be "
+                       f"opened ({exc}) — failing rather than passing unverified"))
+            return EXIT_ENV
+        try:
+            return _run_probes(board, None if probe_names == ["all"] else probe_names, conn)
+        finally:
+            conn.close()
 
     print(_green(f"[verify] PASS — the board's RAM itself confirms the firmware booted "
                  f"(git={info['git']}), no serial cable involved"))
     return EXIT_OK
+
+
+def _check_banner_identity(board: Board, info: dict) -> int | None:
+    """Compare the banner's identity fields against the board profile.
+    Returns an exit code on contradiction, None when consistent."""
+    got_board = info.get("board")
+    if got_board and got_board != board.name:
+        print(_red(f"[verify] BOARD MISMATCH: banner says board={got_board}, "
+                   f"profile expects {board.name} — the verdict would not be "
+                   "about the board you configured"))
+        return EXIT_SHA_MISMATCH
+    expected = board.head_sha()
+    got = info.get("git")
+    if expected and got and expected != got:
+        print(_red(f"[verify] SHA MISMATCH: board runs {got}, repo HEAD is {expected} "
+                   "(rebuild after committing?)"))
+        return EXIT_SHA_MISMATCH
+    return None
 
 
 def _verify_uart(board: Board, probe_names: list[str] | None) -> int:
@@ -365,12 +390,9 @@ def _verify_uart(board: Board, probe_names: list[str] | None) -> int:
         print(_green(f"[verify] banner OK: board={info.get('board')} git={info.get('git')} "
                      f"build={info.get('build')} rtos={info.get('rtos')}"))
 
-        expected = board.head_sha()
-        got = info.get("git")
-        if expected and got and expected != got:
-            print(_red(f"[verify] SHA MISMATCH: board runs {got}, repo HEAD is {expected} "
-                       "(rebuild after committing?)"))
-            return EXIT_SHA_MISMATCH
+        mismatch = _check_banner_identity(board, info)
+        if mismatch is not None:
+            return mismatch
 
         if probe_names is not None:
             return _run_probes(board, None if all_probes else probe_names, conn)

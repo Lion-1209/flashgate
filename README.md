@@ -63,8 +63,8 @@ fresh clone verifies out of the box once wired up.
 | 2 | flash failed |
 | 3 | board stayed silent (no banner / no signature within timeout) |
 | 4 | error string seen on serial (HardFault, assertion) |
-| 5 | on-board identity ≠ repo state |
-| 6 | environment error (no ST-Link / serial / tools) |
+| 5 | on-board identity ≠ repo state (git sha or board name) |
+| 6 | environment error (no ST-Link / serial / tools) — including probes explicitly required via `--probe`/`--all-probes` but the console UART is unavailable: a check that cannot run never counts as a pass |
 | 7 | functional probe failed |
 
 ## The Stop hook
