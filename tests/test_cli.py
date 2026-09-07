@@ -148,23 +148,14 @@ class TestAutoRouting:
         assert seen["mode"] == "uart"
 
 
-class TestEnvelopeCoupling:
-    def test_exit_env_maps_to_incomplete_never_succeeded(self):
-        # Belt-and-suspenders (mutation finding M5): the constant every
-        # fail-closed guard asserts must map to "incomplete" in the MCP
-        # envelope. If the mapping ever flips to "succeeded", a check that
-        # could not run would count as a pass.
-        from flashgate import results
-        assert results.from_exit(cli.EXIT_ENV, "x").status == "incomplete"
-        assert results.from_exit(cli.EXIT_PROBE_FAIL, "x").status == "failed"
-
-
 class TestUartPassPath:
     def test_plain_uart_verify_passes_without_probe_flags(self, tmp_path, monkeypatch, capsys):
         # Regression from 0.4.2: the identity-check refactor left a NameError
         # on the uart PASS print (git={got} referenced a moved local) — verify
         # crashed AFTER everything had passed, exit 1 (misread as build fail).
         board = make_board(tmp_path)
+        monkeypatch.setattr(cli, "_console_port",
+                            lambda b: ("COM77", "pinned"))   # host serial topology must not matter
         monkeypatch.setattr(cli, "_build", lambda b: cli.EXIT_OK)
         monkeypatch.setattr(cli, "cmd_flash", lambda b: cli.EXIT_OK)
         monkeypatch.setattr(cli.serialmon, "open_flush",

@@ -15,12 +15,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.2"]
+mcp = ["mcp>=1.2,<3"]
 dev = ["pytest>=8"]
 
 [project.scripts]
 flashgate = "flashgate.cli:main"
 flashgate-mcp = "flashgate.mcp_server:main"
+
+[tool.pytest.ini_options]
+# keep pytest from climbing into parent workspaces for config
+testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["flashgate*"]

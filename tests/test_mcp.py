@@ -136,6 +136,17 @@ class TestProbeTool:
         assert "COMX" in sc["summary"]
 
 
+class TestExitCoupling:
+    def test_exit_env_maps_to_incomplete_never_succeeded(self):
+        # Belt-and-suspenders (mutation finding M5): the CLI constants the
+        # fail-closed guards assert must map to "incomplete"/"failed" in the
+        # envelope. If the mapping ever flips to "succeeded", a check that
+        # could not run would count as a pass.
+        from flashgate import cli
+        assert results.from_exit(cli.EXIT_ENV, "x").status == "incomplete"
+        assert results.from_exit(cli.EXIT_PROBE_FAIL, "x").status == "failed"
+
+
 class TestProbeEdgeCases:
     """Regressions from the adversarial review of 0.5.0."""
 
