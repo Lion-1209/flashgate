@@ -2,7 +2,9 @@
 
 Exit-code contract (the M3 Stop hook enforces these):
   0 verified | 1 build failed | 2 flash failed | 3 no banner (timeout)
-  4 boot error string | 5 git sha mismatch | 6 environment error
+  4 boot error string | 5 identity mismatch (git sha or board name)
+  6 environment error (incl. probes required but console unavailable)
+  7 functional probe failed
 """
 
 from __future__ import annotations

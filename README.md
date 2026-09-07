@@ -117,7 +117,7 @@ profile the gate stays idle and says so.
 ```
 
 board_info, doctor, build, flash, verify, probe, console_send,
-console_read. Any MCP-capable agent can drive the board directly. mcp 1.x
+console_read. Any MCP-capable agent can drive the board directly. Every tool returns a structured result envelope (status, stable code, summary, CLI exit_code, log) — never a bare log to parse. mcp 1.x
 and 2.x supported.
 
 ## Demos

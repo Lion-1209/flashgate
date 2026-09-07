@@ -146,3 +146,14 @@ class TestAutoRouting:
         monkeypatch.setattr(cli, "_verify_uart", fake_uart)
         assert cli.cmd_verify(board, None, None) == cli.EXIT_OK
         assert seen["mode"] == "uart"
+
+
+class TestEnvelopeCoupling:
+    def test_exit_env_maps_to_incomplete_never_succeeded(self):
+        # Belt-and-suspenders (mutation finding M5): the constant every
+        # fail-closed guard asserts must map to "incomplete" in the MCP
+        # envelope. If the mapping ever flips to "succeeded", a check that
+        # could not run would count as a pass.
+        from flashgate import results
+        assert results.from_exit(cli.EXIT_ENV, "x").status == "incomplete"
+        assert results.from_exit(cli.EXIT_PROBE_FAIL, "x").status == "failed"

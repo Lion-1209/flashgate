@@ -918,6 +918,32 @@ Stop 事件下面应该挂着 flashgate 那条命令。装在用户级可以完�
 对应同名命令，probe 跑探针，console_send 发一条命令给固件，
 console_read 读一段时间串口输出。兼容 mcp 1.x 和 2.x。
 
+每个工具返回统一的 JSON 信封（0.5.0 起），不再是需要模型自己解析的
+日志文本：
+
+```json
+{
+  "schema_version": "1.0",
+  "status": "failed",
+  "code": "PROBE_FAILED",
+  "summary": "verify: [probe] FAIL — assert failed: ...",
+  "exit_code": 7,
+  "data": { "log": "……完整 CLI 输出……" },
+  "warnings": [],
+  "policy": { "risk": "R2" }
+}
+```
+
+status 只有五种：succeeded / failed / incomplete / cancelled /
+timed_out。其中 incomplete 专指"要求的检查没跑成"（比如探针要串口
+但串口不在）——它永远不会和 succeeded 混淆。code 是稳定机器码
+（BUILD_FAILED、FLASH_FAILED、BOOT_EVIDENCE_TIMEOUT、
+IDENTITY_MISMATCH、CAPABILITY_UNAVAILABLE、PROBE_FAILED……），
+agent 按码分支，不用猜文案。exit_code 保留 CLI 契约做兼容层。
+policy.risk 是动作风险等级：R0 只读、R1 可恢复、R2 修改性（flash、
+verify 会重写板上固件）。mcp 2.x 下信封同时走 MCP 结构化通道
+（structuredContent），1.x 下是 JSON 文本，内容一致。
+
 ## 10. 排错
 
 以下每一条都是实际遇到过、修过的问题。
