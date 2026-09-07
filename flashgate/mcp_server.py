@@ -14,7 +14,8 @@ Tools: board_info, doctor, build, flash, verify, probe, console_send,
 console_read.
 
 Every tool returns a `flashgate.results.Result` envelope (schema_version,
-status, stable code, summary, CLI exit_code, data, warnings, policy) —
+status, stable code, summary, CLI exit_code, data, evidence, warnings,
+policy) —
 never a bare log the model has to parse. With mcp 2.x the envelope is
 emitted as MCP structuredContent (registered via structured_output=True)
 plus a JSON text block; on the mcp 1.x fallback the JSON text is still

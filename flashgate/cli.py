@@ -400,7 +400,7 @@ def _verify_uart(board: Board, probe_names: list[str] | None) -> int:
             return _run_probes(board, None if all_probes else probe_names, conn)
 
         print(_green(f"[verify] PASS — the board itself confirms the firmware booted "
-                     f"(git={got})"))
+                     f"(git={info.get('git')})"))
         return EXIT_OK
     finally:
         conn.close()

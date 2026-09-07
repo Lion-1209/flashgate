@@ -1,7 +1,10 @@
 # 基于 MCP 的统一 AI–硬件交互层方案
 
 > 项目代号：FlashGate Hardware Gateway  
-> 文档状态：方案草案  
+> 文档状态：方案草案（Phase 0 部分实现于 v0.4.2——探针 fail-closed、
+> 签名版本拒绝、incomplete 语义已落地，banner 全字段校验与
+> evidence.mode 严格校验仍在清单上；Phase 1 已实现于 v0.5.0；
+> Phase 2 起待触发条件——第一个非 ST 支持需求）  
 > 日期：2026-09-05  
 > 适用对象：架构评审、产品规划、研发拆解、PoC 实施
 

@@ -157,3 +157,22 @@ class TestEnvelopeCoupling:
         from flashgate import results
         assert results.from_exit(cli.EXIT_ENV, "x").status == "incomplete"
         assert results.from_exit(cli.EXIT_PROBE_FAIL, "x").status == "failed"
+
+
+class TestUartPassPath:
+    def test_plain_uart_verify_passes_without_probe_flags(self, tmp_path, monkeypatch, capsys):
+        # Regression from 0.4.2: the identity-check refactor left a NameError
+        # on the uart PASS print (git={got} referenced a moved local) — verify
+        # crashed AFTER everything had passed, exit 1 (misread as build fail).
+        board = make_board(tmp_path)
+        monkeypatch.setattr(cli, "_build", lambda b: cli.EXIT_OK)
+        monkeypatch.setattr(cli, "cmd_flash", lambda b: cli.EXIT_OK)
+        monkeypatch.setattr(cli.serialmon, "open_flush",
+                            lambda *a, **k: SimpleNamespace(close=lambda: None))
+        monkeypatch.setattr(cli.serialmon, "wait_on",
+                            lambda *a, **k: SimpleNamespace(
+                                matched=True, error_hit=None, transcript="",
+                                groups={"board": "test-board", "git": "abc1234"}))
+        monkeypatch.setattr(Board, "head_sha", lambda self: "abc1234")
+        assert cli._verify_uart(board, None) == cli.EXIT_OK
+        assert "PASS" in capsys.readouterr().out
