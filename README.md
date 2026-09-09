@@ -67,6 +67,11 @@ fresh clone verifies out of the box once wired up.
 | 6 | environment error (no ST-Link / serial / tools) — including probes explicitly required via `--probe`/`--all-probes` but the console UART is unavailable: a check that cannot run never counts as a pass |
 | 7 | functional probe failed |
 
+## Contributing
+
+Board profiles, probes, fixes and docs are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the setup and contribution terms.
+
 ## The Stop hook
 
 `hooks/flashgate_stop.py` is a Claude Code Stop hook (any harness
