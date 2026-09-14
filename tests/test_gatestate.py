@@ -110,3 +110,49 @@ class TestUntrackedFingerprintCompleteness:
         (git_repo / "NewModule").mkdir()
         (git_repo / "NewModule" / "mod.c").write_text("int x;\n")
         assert watched_paths(git_repo, DEFAULT_WATCH) == ["NewModule/mod.c"]
+
+
+class TestProfileFingerprint:
+    """The board profile defines what PASS means (probe expectations, build
+    command). Its content must be part of the fingerprint, or a cached
+    green survives edits to the verification semantics themselves."""
+
+    def test_profile_edit_changes_fingerprint(self, git_repo, tmp_path):
+        from flashgate.gatestate import tree_fingerprint
+        profile = tmp_path / "board.yaml"
+        profile.write_text("probes: [strict]\n")
+        fp1 = tree_fingerprint(git_repo, profile)
+        profile.write_text("probes: [loose]\n")     # semantics changed
+        assert tree_fingerprint(git_repo, profile) != fp1
+
+    def test_tree_untouched_by_profile_only_change(self, git_repo, tmp_path):
+        # A profile edit alone must flip the combined fingerprint while the
+        # tree-only view stays identical — the delta comes from the profile.
+        from flashgate.gatestate import tree_fingerprint
+        profile = tmp_path / "board.yaml"
+        profile.write_text("probes: [a]\n")
+        before_tree = tree_fingerprint(git_repo)
+        combined1 = tree_fingerprint(git_repo, profile)
+        profile.write_text("probes: [b]\n")
+        assert tree_fingerprint(git_repo) == before_tree
+        assert tree_fingerprint(git_repo, profile) != combined1
+
+    def test_same_content_same_fingerprint(self, git_repo, tmp_path):
+        # Content-only identity: identical bytes, different name → same digest.
+        from flashgate.gatestate import tree_fingerprint
+        a = tmp_path / "a.yaml"
+        b = tmp_path / "b.yaml"
+        a.write_text("same: true\n")
+        b.write_text("same: true\n")
+        assert tree_fingerprint(git_repo, a) == tree_fingerprint(git_repo, b)
+
+    def test_missing_profile_is_stable_not_crashing(self, git_repo, tmp_path):
+        from flashgate.gatestate import tree_fingerprint
+        ghost = tmp_path / "ghost.yaml"
+        assert tree_fingerprint(git_repo, ghost) == tree_fingerprint(git_repo, ghost)
+
+    def test_profile_none_differs_from_empty_profile(self, git_repo, tmp_path):
+        from flashgate.gatestate import tree_fingerprint
+        empty = tmp_path / "empty.yaml"
+        empty.write_text("")
+        assert tree_fingerprint(git_repo) != tree_fingerprint(git_repo, empty)

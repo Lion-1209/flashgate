@@ -70,6 +70,13 @@ def load_board(yaml_path: Path) -> Board:
         raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         raise BoardError(f"cannot load board profile {yaml_path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        # Empty file parses to None; a list/scalar document is equally
+        # malformed — both must surface as BoardError so the Stop hook's
+        # "gate misconfigured" branch (not a traceback) handles them.
+        raise BoardError(
+            f"board profile {yaml_path} is not a mapping "
+            f"(got {type(raw).__name__})")
 
     fw = raw.get("firmware") or {}
     flash = raw.get("flash") or {}

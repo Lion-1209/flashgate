@@ -93,15 +93,42 @@ def _untracked_content_digest(fw_dir: Path) -> str:
     return h.hexdigest()
 
 
-def tree_fingerprint(fw_dir: Path) -> str:
-    """Content-identity of the working tree (not just HEAD: dirty trees with
-    different edits must NOT share a fingerprint — including edits to
-    untracked files, whose contents are hashed in explicitly)."""
+def _profile_digest(profile: Path) -> str:
+    """sha256 over the board profile's bytes (same 4 MiB cap as untracked
+    files). Identity is content-only: two profiles with identical bytes
+    define identical verification semantics; any location-dependent field
+    resolves through firmware_dir, which is fingerprinted separately."""
+    try:
+        h = hashlib.sha256()
+        with profile.open("rb") as fh:
+            remaining = _HASH_CAP_BYTES
+            while remaining > 0:
+                chunk = fh.read(min(1 << 20, remaining))
+                if not chunk:
+                    break
+                h.update(chunk)
+                remaining -= len(chunk)
+        return h.hexdigest()
+    except OSError:
+        return "<unreadable>"
+
+
+def tree_fingerprint(fw_dir: Path, profile: Path | None = None) -> str:
+    """Content-identity of the working tree AND the verification semantics.
+
+    Not just HEAD: dirty trees with different edits must NOT share a
+    fingerprint — including edits to untracked files (hashed explicitly)
+    and edits to the board profile. The profile defines what "PASS"
+    means (probe expectations, build command), so tightening or loosening
+    it after a cached PASS must invalidate that green, not reuse it —
+    same stale-PASS class as the untracked-content hole (2026-09-13
+    external review)."""
     head = _git(["rev-parse", "HEAD"], fw_dir)
     diff = _git(["diff", "HEAD"], fw_dir)
     status = _git(["status", "--porcelain"], fw_dir)
     untracked = _untracked_content_digest(fw_dir)
-    blob = "\x00".join((head, diff, status, untracked))
+    profile_part = _profile_digest(profile) if profile is not None else "<no-profile>"
+    blob = "\x00".join((head, diff, status, untracked, profile_part))
     return hashlib.sha256(blob.encode("utf-8", errors="replace")).hexdigest()
 
 

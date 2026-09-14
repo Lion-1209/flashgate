@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,11 +23,22 @@ class FlashResult:
 
 def _kill_stlinkserver() -> None:
     """A stale stlink-server session can wedge the probe; it restarts on
-    demand, so killing it between attempts is safe."""
-    subprocess.run(
-        ["taskkill", "/F", "/IM", "stlinkserver.exe"],
-        capture_output=True, timeout=15,
-    )
+    demand, so killing it between attempts is safe. Windows-only: the
+    helper process only exists there and so does taskkill — invoking it
+    on Linux/macOS used to raise FileNotFoundError straight out of the
+    flash-retry path. Best-effort by design: a failed kill must never
+    abort the retry it precedes."""
+    if sys.platform != "win32":
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "stlinkserver.exe"],
+            capture_output=True, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # OSError: taskkill missing/blocked; SubprocessError covers
+        # TimeoutExpired — a kill that hangs 15 s must die quietly too.
+        pass
 
 
 def _attempt_flash(cli: Path, bin_path: Path, connect: str, address: str, start: bool) -> tuple[bool, int, str]:

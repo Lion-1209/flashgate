@@ -95,7 +95,10 @@ def main() -> int:
     if not watched:
         return 0            # no firmware-relevant changes: nothing to gate
 
-    fingerprint = gatestate.tree_fingerprint(fw_dir)
+    # The profile is part of the fingerprint: editing probe expectations or
+    # the build command changes what PASS means and must not reuse a cached
+    # green computed under the old semantics.
+    fingerprint = gatestate.tree_fingerprint(fw_dir, board.yaml_path)
     state = gatestate.load_state(fw_dir)
     if state.get("verified_fingerprint") == fingerprint:
         return 0            # this exact tree state already passed on hardware

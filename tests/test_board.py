@@ -63,6 +63,18 @@ class TestLoadBoard:
         b = load_board(make_profile(tmp_path, body))
         assert b.banner_regex == "BOOT git={git}"
 
+    def test_malformed_document_rejected_not_crash(self, tmp_path):
+        # Adversarial review F4: an empty file parses to None and a
+        # list/scalar document is equally malformed — both must raise
+        # BoardError (the Stop hook's "gate misconfigured" branch), never
+        # a bare AttributeError out of raw.get().
+        import pytest
+        for bad in ("", "- a\n- b\n", "just a scalar\n"):
+            p = tmp_path / "bad.yaml"
+            p.write_text(bad, encoding="utf-8")
+            with pytest.raises(BoardError):
+                load_board(p)
+
 
 class TestHeadSha:
     def test_clean_then_dirty(self, tmp_path, git_repo):

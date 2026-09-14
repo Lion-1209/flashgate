@@ -31,8 +31,9 @@ Both carry the git sha plus `-dirty` when the tree differs from HEAD, so a
 passing verify proves the board is running a build of your current HEAD
 (`-dirty` marks uncommitted changes; it does not fingerprint their
 content — the Stop hook's tree fingerprint covers that side: tracked diffs
-in full, untracked files by path + size + first 4 MiB. Files ignored by
-git and nested git repositories are outside the gate). Functional probes then send real commands and assert on the answers,
+in full, untracked files and the board profile by path + size + first
+4 MiB, so tightening probe expectations invalidates a cached PASS. Files
+ignored by git and nested git repositories are outside the gate). Functional probes then send real commands and assert on the answers,
 including register readbacks (TIM3 CCR), not firmware self-reports:
 
 ```yaml
@@ -79,10 +80,12 @@ Board profiles, probes, fixes and docs are welcome — see
 
 `hooks/flashgate_stop.py` is a Claude Code Stop hook (any harness
 implementing the same hook contract works). When the agent tries to finish after
-touching watched firmware files, the hook fingerprints the tree and allows
-instantly if that exact state already passed hardware verify (~0.7 s
-cached). Otherwise it runs the full verify on the real board and blocks
-the stop on failure, feeding the agent the board's testimony:
+touching watched firmware files, the hook fingerprints the tree (plus the
+board profile — editing verification semantics must not reuse a cached
+green) and allows instantly if that exact state already passed hardware
+verify (~0.7 s cached). Otherwise it runs the full verify on the real
+board and blocks the stop on failure, feeding the agent the board's
+testimony:
 
 ```
 [flashgate] BLOCKED (attempt 1/2): firmware changes are not verified on hardware (verify rc=7).
