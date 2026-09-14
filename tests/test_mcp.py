@@ -206,3 +206,22 @@ class TestCatchAllGuard:
         assert sc["status"] == "failed"
         assert sc["code"] == results.INTERNAL_ERROR
         assert "kaboom" in sc["summary"]
+
+
+class TestBoardInfoProbesWarning:
+    def test_no_step_probe_becomes_warning_not_internal_error(self, tmp_path):
+        # F2 regression: board_info claimed "warnings flag an unloadable
+        # probes section" but ProbeError (probe with no steps) escaped to
+        # INTERNAL_ERROR. The except tuple must match the probe tool's.
+        yaml = tmp_path / "board.yaml"
+        yaml.write_text(
+            "board: t\nmcu: m\ndescription: d\nfirmware:\n  dir: fw\n"
+            "  build: ninja -C build\n  artifact: build/fw.bin\nserial:\n"
+            "  baudrate: 9600\n  banner: 'BOOT {git}'\n"
+            "probes:\n  broken: {}\n", encoding="utf-8")
+        (tmp_path / "fw").mkdir()
+        res = asyncio.run(srv.mcp.call_tool("board_info", {"board": str(yaml)}))
+        sc = res.structured_content
+        assert sc["status"] == "succeeded"          # profile itself is fine
+        assert sc["data"]["probes"] == []
+        assert any("probes unloadable" in w for w in sc["warnings"])

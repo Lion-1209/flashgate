@@ -139,8 +139,17 @@ def _safe(policy: dict):
 @_register(annotations=_ann(readOnlyHint=True), structured=True)
 @_safe(P_READ)
 def board_info(board: str | None = None) -> results.Result:
-    """Show the active board profile: firmware dir, artifact, watch globs,
-    banner contract, and the functional probes it defines."""
+    """Discover what hardware you are working with: the active board
+    profile.
+
+    Call this FIRST in any session — it tells you the board identity
+    (name, MCU), where the firmware builds (firmware_dir, artifact), how
+    it flashes (flash connection), and — most importantly — which
+    functional probes exist (the "probes" list holds the names the probe
+    tool accepts). Read-only; touches neither host nor board.
+
+    Result: data carries the full profile; warnings flag an unloadable
+    probes section (fix the board YAML before relying on probes)."""
     try:
         b = _board(board)
     except BoardError as exc:
@@ -150,7 +159,7 @@ def board_info(board: str | None = None) -> results.Result:
     warnings: list[str] = []
     try:
         probes = list(probe_mod.load_probes(b.yaml_path))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, probe_mod.ProbeError) as exc:
         warnings.append(f"probes unloadable: {exc}")
     r = results.ok(
         f"{b.name} ({b.mcu}) — {len(probes)} probe(s) defined",
@@ -173,8 +182,14 @@ def board_info(board: str | None = None) -> results.Result:
 @_register(annotations=_ann(readOnlyHint=True), structured=True)
 @_safe(P_READ)
 def doctor(board: str | None = None) -> results.Result:
-    """Check hardware prerequisites: ST-Link probe, console serial port,
-    toolchain. Run this first when anything else fails (exit code 6)."""
+    """Diagnose the bench: is the ST-Link probe visible, is the console
+    serial port resolvable, is the cross toolchain installed?
+
+    Run this before anything else when a board operation fails — and
+    ALWAYS when a tool returns status "incomplete" or code
+    CAPABILITY_UNAVAILABLE; the report names the exact missing link.
+    Read-only. Findings are listed in data.log under "issues:"; an empty
+    problems list with exit_code 0 means every prerequisite is healthy."""
     try:
         rc, log = _capture(cli_mod.cmd_doctor, _board(board))
     except BoardError as exc:
@@ -186,7 +201,14 @@ def doctor(board: str | None = None) -> results.Result:
 @_register(annotations=_ann(idempotentHint=True), structured=True)
 @_safe(P_BUILD)
 def build(board: str | None = None) -> results.Result:
-    """Build the firmware (incremental). Fails with code BUILD_FAILED."""
+    """Compile the board's firmware (incremental — recompiles only what
+    changed). No hardware is touched.
+
+    Mostly useful on its own for a fast failure loop; verify runs the
+    same build internally, so you don't need this before verify. Result:
+    succeeded + exit_code 0 = clean build; failed + BUILD_FAILED = the
+    compiler output in data.log names the offending file and line. The
+    binary lands at the profile's artifact path, ready for flash."""
     try:
         rc, log = _capture(cli_mod.cmd_build, _board(board))
     except BoardError as exc:
@@ -198,8 +220,16 @@ def build(board: str | None = None) -> results.Result:
 @_register(annotations=_ann(destructiveHint=True), structured=True)
 @_safe(P_FLASH)
 def flash(board: str | None = None) -> results.Result:
-    """Flash + verify + start via ST-Link (with auto-retry). Destructive:
-    replaces the firmware running on the board."""
+    """Write the built firmware to the board's flash over ST-Link,
+    verify the write, then start the application. DESTRUCTIVE: whatever
+    runs on the MCU is replaced.
+
+    Flashes the artifact from the last build — call build first if
+    sources changed since. Tries up to 3 times on transient probe
+    errors. Any failure — including a missing ST-Link or CubeProgrammer —
+    surfaces as failed + FLASH_FAILED, exit_code 2; data.log carries the
+    programmer output. Run doctor to tell an environment problem (no
+    probe / no tools) apart from a write failure."""
     try:
         rc, log = _capture(cli_mod.cmd_flash, _board(board))
     except BoardError as exc:
@@ -211,12 +241,27 @@ def flash(board: str | None = None) -> results.Result:
 @_register(annotations=_ann(destructiveHint=True), structured=True)
 @_safe(P_VERIFY)
 def verify(board: str | None = None) -> results.Result:
-    """The full gate: build -> flash -> boot evidence -> identity check ->
-    all functional probes. status=succeeded means the BOARD ITSELF confirms
-    the firmware works. Failure codes: BUILD_FAILED, FLASH_FAILED,
-    BOOT_EVIDENCE_TIMEOUT, BOOT_ERROR, IDENTITY_MISMATCH,
-    CAPABILITY_UNAVAILABLE (console needed by probes but unavailable),
-    PROBE_FAILED."""
+    """The hardware gate — the authoritative answer to "does this
+    firmware actually work on the board?". status=succeeded means the
+    BOARD ITSELF booted the exact tree you are on (its reported git sha
+    matches the working tree) and every functional probe passed. Trust no
+    other signal; a clean build is not a pass.
+
+    What it does: rebuild the tree, flash over ST-Link, start the app,
+    then require boot evidence proving WHICH build is running (UART
+    banner; or, without a serial cable, an SWD RAM signature — wiped
+    first, best-effort, so a stale one cannot lie), then run every
+    defined probe, asserting on the board's answers — including live
+    register readbacks where the board provides them. DESTRUCTIVE:
+    rewrites the board's flash.
+
+    The failure code names the broken stage — BUILD_FAILED (compile),
+    FLASH_FAILED (write/start), BOOT_EVIDENCE_TIMEOUT (board silent),
+    BOOT_ERROR (fault string on serial), IDENTITY_MISMATCH (board runs a
+    different tree), CAPABILITY_UNAVAILABLE (a required check could not
+    run — most often probes needing the console UART, which is missing or
+    held by another program), PROBE_FAILED (a functional assertion did
+    not hold). Full transcript in data.log."""
     try:
         rc, log = _capture(cli_mod.cmd_verify, _board(board), ["all"])
     except BoardError as exc:
@@ -228,10 +273,17 @@ def verify(board: str | None = None) -> results.Result:
 @_register(annotations=_ann(readOnlyHint=False), structured=True)
 @_safe(P_PROBE)
 def probe(names: list[str] | None = None, board: str | None = None) -> results.Result:
-    """Run functional probes against the ALREADY RUNNING firmware (no
-    rebuild/reflash). names=None or [] runs every probe (same semantics as
-    the CLI). The probe stage needs the console UART; without it the result
-    is incomplete / CAPABILITY_UNAVAILABLE — never a pass."""
+    """Exercise the firmware ALREADY RUNNING on the board with its
+    defined probes: each probe sends console commands and asserts on the
+    board's answers — including live register readbacks (e.g. the timer
+    value actually driving an LED). No rebuild, no reflash.
+
+    names picks specific probes (valid names are in board_info's
+    "probes" list); omit it or pass [] to run all. Probes need the
+    console UART: without it the result is incomplete +
+    CAPABILITY_UNAVAILABLE — never a pass. failed + PROBE_FAILED means an
+    assertion did not hold; data.log shows the exact step, the board's
+    last response, and which value was off."""
     try:
         b = _board(board)
     except BoardError as exc:
@@ -270,8 +322,17 @@ def probe(names: list[str] | None = None, board: str | None = None) -> results.R
 @_register(annotations=_ann(readOnlyHint=False, openWorldHint=True), structured=True)
 @_safe(P_CONSOLE_SEND)
 def console_send(line: str, wait_s: float = 1.0, board: str | None = None) -> results.Result:
-    """Send ONE line to the firmware console (e.g. 'led0?' or 'selftest')
-    and return the response lines received within wait_s seconds."""
+    """Talk to the firmware directly: send ONE command line on the
+    console UART and collect its answer.
+
+    Example: line "led0?" — the firmware replies with its LED state and
+    the live PWM register value (a hardware readback, not a cached
+    variable). The command set is board-specific — board_info and the
+    board's probe definitions show the known commands; unknown commands
+    typically answer "ERR unknown-cmd". The reply lands in
+    data.response within wait_s seconds; silence is reported as
+    "(no response)" in the summary + a warning — check wiring before
+    concluding the firmware is dead."""
     try:
         b = _board(board)
     except BoardError as exc:
@@ -307,8 +368,14 @@ def console_send(line: str, wait_s: float = 1.0, board: str | None = None) -> re
 @_register(annotations=_ann(readOnlyHint=True), structured=True)
 @_safe(P_READ)
 def console_read(seconds: float = 2.0, board: str | None = None) -> results.Result:
-    """Read whatever the firmware prints on the console for N seconds
-    (banner, self-test output, fault dumps)."""
+    """Listen passively: capture everything the firmware prints on the
+    console for the given number of seconds, sending nothing.
+
+    Use it to watch boot banners, self-test prints, or fault dumps
+    (HardFault traces appear here). Output lands in data.text; a fully
+    silent window is reported as "(console silent)" in the summary —
+    which for a just-reset board usually means wiring or baud-rate
+    trouble rather than a healthy quiet firmware. Read-only."""
     try:
         b = _board(board)
     except BoardError as exc:
