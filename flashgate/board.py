@@ -48,11 +48,13 @@ class Board:
             sha = subprocess.run(
                 ["git", "rev-parse", "--short=7", "HEAD"],
                 cwd=self.firmware_dir, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
                 timeout=15, check=True,
             ).stdout.strip()
             status = subprocess.run(
                 ["git", "status", "--porcelain"],
                 cwd=self.firmware_dir, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
                 timeout=15, check=True,
             ).stdout.strip()
             if status:

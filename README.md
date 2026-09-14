@@ -28,8 +28,11 @@ FLASHGATE-BOOT board=apollo-h743 git=2c58bd3 build=2026-08-28T07:26:35Z rtos=Fre
 ```
 
 Both carry the git sha plus `-dirty` when the tree differs from HEAD, so a
-passing verify proves the board is running exactly the code you're looking
-at. Functional probes then send real commands and assert on the answers,
+passing verify proves the board is running a build of your current HEAD
+(`-dirty` marks uncommitted changes; it does not fingerprint their
+content — the Stop hook's tree fingerprint covers that side: tracked diffs
+in full, untracked files by path + size + first 4 MiB. Files ignored by
+git and nested git repositories are outside the gate). Functional probes then send real commands and assert on the answers,
 including register readbacks (TIM3 CCR), not firmware self-reports:
 
 ```yaml

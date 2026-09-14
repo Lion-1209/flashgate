@@ -31,22 +31,77 @@ DEFAULT_WATCH = [
 
 
 def _git(args: list[str], cwd: Path) -> str:
+    # errors="surrogateescape": `ls-files -z` emits raw UTF-8 path bytes and
+    # text=True alone would decode with the ANSI code page (cp936 on a
+    # Chinese Windows) — a non-ASCII path then kills the reader thread,
+    # stdout becomes None, and the Stop hook crashes to exit 1, which the
+    # hook contract treats as non-blocking: the gate would fail OPEN.
     try:
-        return subprocess.run(
+        proc = subprocess.run(
             ["git", *args], cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="surrogateescape",
             timeout=20, check=True,
-        ).stdout
+        )
+        return proc.stdout or ""
     except (subprocess.SubprocessError, OSError):
         return ""
 
 
+_HASH_CAP_BYTES = 4 * 1024 * 1024   # per file: length + first 4 MiB
+
+
+def _untracked_files(fw_dir: Path) -> list[str]:
+    """Untracked files, recursively, gitignore-respecting, no quoting.
+
+    `git status --porcelain` collapses a new directory to '?? dir/' (hiding
+    every file inside) and C-escapes non-ASCII paths under core.quotepath —
+    both let content edits slip past a content digest. `ls-files
+    --others --exclude-standard -z` lists real paths, NUL-separated."""
+    out = _git(["ls-files", "--others", "--exclude-standard", "-z"], fw_dir)
+    return sorted(p for p in out.split("\x00") if p)
+
+
+def _untracked_content_digest(fw_dir: Path) -> str:
+    """Digest over the CONTENT of untracked files.
+
+    Found by the 2026-09-13 external review: git diff ignores untracked
+    files and git status lists only their paths, so editing an untracked
+    source file after a cached PASS kept the fingerprint unchanged — the
+    Stop hook reused the stale green. Hashing path + size + content closes
+    it. The gate's own state dir is excluded: save_state() rewrites a
+    timestamp there, and letting it feed the fingerprint would invalidate
+    every cached PASS."""
+    h = hashlib.sha256()
+    for path in _untracked_files(fw_dir):
+        if path == ".flashgate" or path.startswith(".flashgate/"):
+            continue
+        f = fw_dir / path
+        try:
+            size = f.stat().st_size
+            h.update(f"{path}\x00{size}\x00".encode("utf-8", errors="replace"))
+            with f.open("rb") as fh:               # chunked: never OOM on a
+                remaining = min(size, _HASH_CAP_BYTES)  # stray huge file
+                while remaining > 0:
+                    chunk = fh.read(min(1 << 20, remaining))
+                    if not chunk:
+                        break
+                    h.update(chunk)
+                    remaining -= len(chunk)
+        except OSError:
+            h.update(f"{path}\x00<unreadable>\x00".encode("utf-8", errors="replace"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
 def tree_fingerprint(fw_dir: Path) -> str:
     """Content-identity of the working tree (not just HEAD: dirty trees with
-    different edits must NOT share a fingerprint)."""
+    different edits must NOT share a fingerprint — including edits to
+    untracked files, whose contents are hashed in explicitly)."""
     head = _git(["rev-parse", "HEAD"], fw_dir)
     diff = _git(["diff", "HEAD"], fw_dir)
     status = _git(["status", "--porcelain"], fw_dir)
-    blob = "\x00".join((head, diff, status))
+    untracked = _untracked_content_digest(fw_dir)
+    blob = "\x00".join((head, diff, status, untracked))
     return hashlib.sha256(blob.encode("utf-8", errors="replace")).hexdigest()
 
 
@@ -55,10 +110,18 @@ def watched_paths(fw_dir: Path, patterns: list[str]) -> list[str]:
     status = _git(["status", "--porcelain"], fw_dir)
     watched: list[str] = []
     for line in status.splitlines():
+        if line.startswith("?? "):
+            continue     # untracked: handled below, dir-collapsed in status
         path = line[3:].strip().strip('"')
         if " -> " in path:                     # rename: judge by the new name
             path = path.split(" -> ")[1]
         if path and any(fnmatch(path, pat) for pat in patterns):
+            watched.append(path)
+    # Untracked files come from ls-files: a new directory collapses to a
+    # single '?? dir/' status line that no *.c glob can match, which used
+    # to mean new files in new dirs never even triggered the gate.
+    for path in _untracked_files(fw_dir):
+        if any(fnmatch(path, pat) for pat in patterns):
             watched.append(path)
     return watched
 

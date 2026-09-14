@@ -12,6 +12,10 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.11", "3.12"]
     runs-on: ${{ matrix.os }}
+    env:
+      # windows+3.11 leg exercises the ANSI-code-page path: non-ASCII
+      # repo paths must not crash git-output decoding (fail-open bug class)
+      PYTHONUTF8: ${{ (matrix.os == 'windows-latest' && matrix.python == '3.11') && '0' || '1' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

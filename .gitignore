@@ -9,3 +9,4 @@ demo/5-agent-blocked.gif
 
 # design doc grows into its own project — stays out of this repo
 docs/design/
+device-connect-vs-*.md
