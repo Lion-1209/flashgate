@@ -622,6 +622,9 @@ def cmd_console(board: Board) -> int:
         serialmon.console_forever(port, board.baudrate)
     except KeyboardInterrupt:
         print()
+    except serial.SerialException as exc:
+        print(_red(f"[console] {exc}"))
+        return EXIT_ENV
     return EXIT_OK
 
 

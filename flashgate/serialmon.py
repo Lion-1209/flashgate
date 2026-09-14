@@ -54,17 +54,60 @@ def resolve_console_port(
     return None, f"ambiguous: multiple serial ports [{names}] — set serial.port or {ENV_PORT}"
 
 
-def open_flush(device: str, baudrate: int) -> serial.Serial:
+# Windows COM ports are exclusive and their handle release is ASYNC: right
+# after the previous process exits (e.g. a verify followed by the Stop
+# hook's own verify — seen live in the 2026-09-14 Claude Code session),
+# reopening can fail with access-denied for a sub-second driver window.
+# Retrying briefly turns that transient into a non-event; a genuinely
+# held port (serial monitor, concurrent verify) exhausts the attempts and
+# the raised error says what to do about it.
+_OPEN_ATTEMPTS = 5
+_OPEN_RETRY_DELAY_S = 0.5
+
+
+def _is_access_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(mark in text for mark in (
+        "permissionerror", "access is denied", "errno 13",
+        "win error 5", "being used by another process", "拒绝访问",
+    ))
+
+
+def open_flush(device: str, baudrate: int,
+               attempts: int = _OPEN_ATTEMPTS,
+               retry_delay_s: float = _OPEN_RETRY_DELAY_S) -> serial.Serial:
     """Open and drain stale output (a previous firmware's banner).
 
     verify() keeps this connection open across the flash step on purpose:
     the banner emitted right at the `--start` reset then sits in the OS
     buffer instead of being lost to a close/reopen race.
-    """
-    conn = serial.Serial(device, baudrate, timeout=0.2)
-    conn.reset_input_buffer()
-    conn.reset_output_buffer()
-    return conn
+
+    Access-denied failures are retried for ~attempts × retry_delay_s: the
+    driver's async handle teardown after a just-exited process must not
+    surface as CAPABILITY_UNAVAILABLE. Other errors (bad port name, no
+    such device) raise immediately — retrying those is pure latency."""
+    last_exc: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            conn = serial.Serial(device, baudrate, timeout=0.2)
+            conn.reset_input_buffer()
+            conn.reset_output_buffer()
+            return conn
+        except (serial.SerialException, PermissionError, OSError) as exc:
+            if not _is_access_error(exc):
+                raise
+            last_exc = exc
+            if attempt < attempts:
+                time.sleep(retry_delay_s)
+    waited = (attempts - 1) * retry_delay_s
+    raise serial.SerialException(
+        f"{device} is held by another process after {attempts} attempts "
+        f"(~{waited:.0f}s): {last_exc}. Close any serial monitor "
+        "(串口助手/putty/VSCode serial monitor) or concurrent flashgate/verify "
+        "run holding it. If a verify JUST finished, its handle may still be "
+        "closing — simply retry. On Linux, 'Permission denied' can also mean "
+        "your user lacks dialout access (add yourself to the dialout group "
+        "or fix the udev rule).")
 
 
 def wait_on(
@@ -101,9 +144,15 @@ def wait_on(
 
 
 def console_forever(device: str, baudrate: int) -> None:
-    with serial.Serial(device, baudrate, timeout=0.2) as conn:
+    # open_flush (not a bare Serial): a held/tearing-down port gets the
+    # retry window and the actionable message, and cmd_console maps the
+    # failure onto EXIT_ENV instead of a raw traceback (runtime audit G).
+    conn = open_flush(device, baudrate)
+    try:
         while True:
             chunk = conn.read(512)
             if chunk:
                 sys.stdout.write(chunk.decode("utf-8", errors="replace"))
                 sys.stdout.flush()
+    finally:
+        conn.close()
