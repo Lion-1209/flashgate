@@ -51,7 +51,7 @@ try:
 except ImportError:                                         # pre-1.9 SDK
     ToolAnnotations = None                                  # type: ignore[assignment]
 
-from . import __version__, flasher, probes as probe_mod, serialmon
+from . import __version__, flasher, probes as probe_mod, records, serialmon
 from . import results
 from .board import Board, BoardError, default_board_path, load_board
 from . import cli as cli_mod
@@ -261,13 +261,30 @@ def verify(board: str | None = None) -> results.Result:
     different tree), CAPABILITY_UNAVAILABLE (a required check could not
     run — most often probes needing the console UART, which is missing or
     held by another program), PROBE_FAILED (a functional assertion did
-    not hold). Full transcript in data.log."""
+    not hold). Full transcript in data.log; data.record carries the
+    persisted evidence record of this run (per-check verdicts, banner /
+    signature / probe evidence, artifact sha256) and data.record_dir is
+    where the JSON audit trail accumulates."""
     try:
-        rc, log = _capture(cli_mod.cmd_verify, _board(board), ["all"])
+        board_obj = _board(board)
     except BoardError as exc:
         return results.failure(str(exc), code=results.PROFILE_NOT_FOUND,
                                policy=P_VERIFY)
-    return _cli_result("verify", rc, log, P_VERIFY)
+    t0 = time.monotonic()
+    rc, log = _capture(cli_mod.cmd_verify, board_obj, ["all"])
+    result = _cli_result("verify", rc, log, P_VERIFY)
+    # Attach THIS run's record — the in-process registry, never a blind
+    # mtime pick (adversarial review F3: a failed run whose own record
+    # write broke must not carry some earlier run's green record).
+    try:
+        last = records.LAST
+        if (last is not None and last["at"] >= t0
+                and Path(last["fw_dir"]) == board_obj.firmware_dir):
+            result.data["record"] = last["record"]
+            result.data["record_dir"] = str(records.records_dir(board_obj.firmware_dir))
+    except (OSError, ValueError, KeyError, TypeError):   # evidence, not the gate
+        pass
+    return result
 
 
 @_register(annotations=_ann(readOnlyHint=False), structured=True)

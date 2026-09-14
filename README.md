@@ -32,7 +32,8 @@ passing verify proves the board is running a build of your current HEAD
 (`-dirty` marks uncommitted changes; it does not fingerprint their
 content — the Stop hook's tree fingerprint covers that side: tracked diffs
 in full, untracked files and the board profile by path + size + first
-4 MiB, so tightening probe expectations invalidates a cached PASS. Files
+4 MiB, plus the flashgate version itself, so tightening probe
+expectations or upgrading the tool invalidates a cached PASS. Files
 ignored by git and nested git repositories are outside the gate). Functional probes then send real commands and assert on the answers,
 including register readbacks (TIM3 CCR), not firmware self-reports:
 
@@ -97,6 +98,21 @@ testimony:
 The same broken tree is blocked at most twice, then released with a loud
 warning — the session can never wedge, and a failure is never silently
 swallowed.
+
+## Verification records
+
+Every `verify` — passing or failing — leaves an evidence record at
+`<firmware>/.flashgate/records/<ts>-<exit>-<fingerprint8>.json`: the
+per-check verdicts (`build`/`flash`/`boot`/`identity`/`probe:*`, with
+`skipped` meaning *never executed*, never a silent absence), the raw
+evidence behind them (banner line, SWD signature fields, console tails,
+failing probe transcripts), the artifact sha256, and the exact
+tree+profile+tool-version identity the verdict applies to. The MCP
+`verify` tool returns the same record inline as `data.record`. Format:
+[docs/record-schema.md](docs/record-schema.md). Keep `.flashgate/` in your
+firmware repo's `.gitignore` (the shipped example does), or every record
+write churns the fingerprint. A record that cannot be written is a
+warning, never a changed exit code — and a crashed run still leaves one.
 
 ## Install as a Claude Code plugin
 

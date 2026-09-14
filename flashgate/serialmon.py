@@ -20,6 +20,8 @@ class BannerResult:
     groups: dict[str, str] | None
     transcript: str
     error_hit: str | None
+    matched_line: str = ""        # the exact banner line (m.group(0)); the
+                                  # transcript tail may contain LATER output too
 
 
 def resolve_console_port(
@@ -89,7 +91,8 @@ def wait_on(
                 sys.stdout.flush()
             m = pattern.search(transcript)
             if m:
-                return BannerResult(True, m.groupdict(), transcript, None)
+                return BannerResult(True, m.groupdict(), transcript, None,
+                                    m.group(0))
             for err in error_patterns:
                 if err in transcript:
                     return BannerResult(False, None, transcript, err)

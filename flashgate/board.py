@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,13 +82,30 @@ def load_board(yaml_path: Path) -> Board:
     fw = raw.get("firmware") or {}
     flash = raw.get("flash") or {}
     ser = raw.get("serial") or {}
-
-    base = yaml_path.parent
     ev = raw.get("evidence") or {}
+    evidence_mode = str(ev.get("mode", "auto")).lower()
+    if evidence_mode not in ("auto", "uart", "swd"):
+        # A typo like 'uat' used to fall through to the UART path silently —
+        # the gate would then vouch for evidence it was never configured to
+        # collect. Unknown enum values are load-time errors.
+        raise BoardError(
+            f"board profile {yaml_path.name}: evidence.mode must be one of "
+            f"auto|uart|swd, got {evidence_mode!r}")
+    base = yaml_path.parent
     sig = ev.get("signature") or {}
     banner = str(ser.get("banner") or ser.get("banner_regex") or "")
     if not banner:
         raise BoardError(f"board profile {yaml_path.name} missing key: 'banner'")
+    # Pre-compile at load (adversarial review F1 config-raiser): a broken
+    # regex used to survive until mid-verify, crashing the boot step with
+    # a bare re.error instead of surfacing as a load-time config error.
+    from .probes import compile_pattern          # lazy: probes pulls pyserial
+    try:
+        compile_pattern(banner, anchor=False)
+    except re.error as exc:
+        raise BoardError(
+            f"board profile {yaml_path.name}: banner pattern does not "
+            f"compile: {exc}") from exc
     try:
         board = Board(
             name=raw["board"],
@@ -107,7 +125,7 @@ def load_board(yaml_path: Path) -> Board:
             banner_timeout_s=float(ser.get("banner_timeout_s", 15)),
             error_patterns=tuple(ser.get("error_patterns", [])),
             watch_globs=tuple((raw.get("gate") or {}).get("watch", DEFAULT_WATCH)),
-            evidence_mode=str(ev.get("mode", "auto")),
+            evidence_mode=evidence_mode,
             sig_address=int(str(sig.get("address", "0x2001FF00")), 0),
             sig_size=int(sig.get("size", 64)),
             yaml_path=yaml_path,

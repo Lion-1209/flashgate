@@ -225,3 +225,91 @@ class TestBoardInfoProbesWarning:
         assert sc["status"] == "succeeded"          # profile itself is fine
         assert sc["data"]["probes"] == []
         assert any("probes unloadable" in w for w in sc["warnings"])
+
+
+class TestVerifyRecord:
+    """Stage 1: verify returns the persisted evidence record inline."""
+
+    def test_verify_data_carries_record(self, tmp_path, monkeypatch):
+        from flashgate import records as rec_mod
+        from flashgate import cli
+        yaml = TestProbeEdgeCases._board_yaml(tmp_path)
+        board = cli.load_board(yaml)
+
+        def fake_verify(b, names, evidence=None):
+            j = rec_mod.VerifyJournal(["build"], mode="swd", probe_names=names)
+            j.check("build", "passed")
+            rec = j.to_record(b, 0, "succeeded", "stubbed pass")
+            rec_mod.write_record(rec, b.firmware_dir, fingerprint="aa" * 32)
+            return 0
+
+        monkeypatch.setattr(srv.cli_mod, "cmd_verify", fake_verify)
+        res = asyncio.run(srv.mcp.call_tool(
+            "verify", {"board": str(yaml)}))
+        data = res.structured_content
+        assert data["status"] == "succeeded"
+        assert data["data"]["record"]["run"]["exit_code"] == 0
+        assert data["data"]["record"]["checks"][0]["name"] == "build"
+        assert data["data"]["record_dir"].replace("\\", "/").endswith(
+            ".flashgate/records")
+
+    def test_verify_survives_record_read_failure(self, tmp_path, monkeypatch):
+        yaml = TestProbeEdgeCases._board_yaml(tmp_path)
+
+        def fake_verify(b, names, evidence=None):
+            return 7
+
+        monkeypatch.setattr(srv.cli_mod, "cmd_verify", fake_verify)
+        monkeypatch.setattr(srv.records, "latest_record",
+                            lambda d: (_ for _ in ()).throw(OSError("gone")))
+        res = asyncio.run(srv.mcp.call_tool(
+            "verify", {"board": str(yaml)}))
+        assert res.structured_content["status"] == "failed"
+        assert "record" not in res.structured_content["data"]
+
+
+class TestVerifyRecordIsolation:
+    """Adversarial review F3: data.record must be THIS run's record —
+    never a stale green one picked by mtime."""
+
+    def test_stale_last_not_attached(self, tmp_path, monkeypatch):
+        import time as _time
+        from flashgate import records as rec_mod
+        from flashgate import cli
+        yaml = TestProbeEdgeCases._board_yaml(tmp_path)
+        board = cli.load_board(yaml)
+        # an OLD run's green record — BOTH in the in-process registry AND
+        # on disk, so neither an mtime pick nor a stale LAST may attach it
+        j = rec_mod.VerifyJournal(["build"], mode="swd", probe_names=None)
+        j.check("build", "passed")
+        stale = j.to_record(board, 0, "succeeded", "old green run")
+        rec_mod.write_record(stale, board.firmware_dir, fingerprint="cc" * 32)
+        rec_mod.LAST = {"record": stale, "fw_dir": board.firmware_dir,
+                        "at": _time.monotonic() - 5, "path": None}
+
+        def fake_verify(b, names, evidence=None):
+            return 7                      # fails, writes nothing
+
+        monkeypatch.setattr(srv.cli_mod, "cmd_verify", fake_verify)
+        res = asyncio.run(srv.mcp.call_tool("verify", {"board": str(yaml)}))
+        data = res.structured_content
+        assert data["status"] == "failed"
+        assert "record" not in data["data"], \
+            "a failed run must not carry an older run's record"
+
+    def test_fresh_last_attached(self, tmp_path, monkeypatch):
+        from flashgate import records as rec_mod
+        from flashgate import cli
+        yaml = TestProbeEdgeCases._board_yaml(tmp_path)
+        board = cli.load_board(yaml)
+
+        def fake_verify(b, names, evidence=None):
+            j = rec_mod.VerifyJournal(["build"], mode="swd", probe_names=names)
+            j.check("build", "passed")
+            rec = j.to_record(b, 0, "succeeded", "ok")
+            rec_mod.write_record(rec, b.firmware_dir, fingerprint="bb" * 32)
+            return 0
+
+        monkeypatch.setattr(srv.cli_mod, "cmd_verify", fake_verify)
+        res = asyncio.run(srv.mcp.call_tool("verify", {"board": str(yaml)}))
+        assert res.structured_content["data"]["record"]["run"]["exit_code"] == 0

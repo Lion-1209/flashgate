@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
 
+from . import __version__ as _FGATE_VERSION
+
 STATE_DIR = ".flashgate"
 STATE_FILE = "state.json"
 MAX_CONSECUTIVE_BLOCKS = 2
@@ -48,6 +50,15 @@ def _git(args: list[str], cwd: Path) -> str:
 
 
 _HASH_CAP_BYTES = 4 * 1024 * 1024   # per file: length + first 4 MiB
+
+
+def _is_state_dir_status(line: str) -> bool:
+    """Is this a `git status --porcelain` line about the gate's own
+    .flashgate/ dir (untracked, at any depth)?"""
+    if not line.startswith("?? "):
+        return False
+    path = line[3:].strip().strip('"').rstrip("/")
+    return path == ".flashgate" or path.endswith("/.flashgate")
 
 
 def _untracked_files(fw_dir: Path) -> list[str]:
@@ -126,9 +137,25 @@ def tree_fingerprint(fw_dir: Path, profile: Path | None = None) -> str:
     head = _git(["rev-parse", "HEAD"], fw_dir)
     diff = _git(["diff", "HEAD"], fw_dir)
     status = _git(["status", "--porcelain"], fw_dir)
+    # The gate's own state (PASS cache, verify records) lives under
+    # .flashgate/ and must not feed the identity: the first-ever write
+    # would flip `git status` from nothing to an untracked line and every
+    # later fingerprint stays shifted — one wasted re-verify per repo.
+    # Path-segment match, not prefix: with the firmware dir as a SUBDIR of
+    # a larger repo, status emits repo-root-relative paths
+    # ('?? fw/.flashgate/'), which a plain startswith('?? .flashgate')
+    # would miss (runtime audit, 2026-09-14).
+    status = "\n".join(
+        ln for ln in status.splitlines() if not _is_state_dir_status(ln))
     untracked = _untracked_content_digest(fw_dir)
     profile_part = _profile_digest(profile) if profile is not None else "<no-profile>"
-    blob = "\x00".join((head, diff, status, untracked, profile_part))
+    # The verifying tool itself defines what PASS means (probe semantics,
+    # evidence parsing). Adversarial-review finding F2: a flashgate upgrade
+    # could loosen assertions while the tree+profile stayed identical and
+    # the cached green would survive. Version joins the identity, so an
+    # upgrade invalidates the cache once — fail-safe direction.
+    blob = "\x00".join((head, diff, status, untracked, profile_part,
+                        f"flashgate={_FGATE_VERSION}"))
     return hashlib.sha256(blob.encode("utf-8", errors="replace")).hexdigest()
 
 

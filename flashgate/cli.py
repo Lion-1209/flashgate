@@ -23,7 +23,7 @@ import yaml
 
 from . import __version__
 from .board import Board, BoardError, default_board_path, load_board
-from . import flasher, probes as probe_mod, serialmon, swdsig
+from . import flasher, gatestate, probes as probe_mod, records, serialmon, swdsig
 from .sttools import augmented_env, find_cubeprogrammer
 
 EXIT_OK = 0
@@ -161,13 +161,15 @@ def cmd_doctor(board: Board) -> int:
     return EXIT_OK
 
 
-def _build(board: Board) -> int:
+def _build(board: Board, j: records.VerifyJournal | None = None) -> int:
     print(_cyan(f"[build] {board.build_command}  (in {board.firmware_dir})"))
     build_ninja = board.firmware_dir / "build" / "Debug" / "build.ninja"
     if not build_ninja.is_file() and board.configure_command:
         print(_cyan(f"[configure] {board.configure_command}"))
         code, out = _run(board.configure_command, board.firmware_dir)
         if code != 0:
+            if j:
+                j.check("build", "failed", f"configure failed (exit {code})")
             print(_red(out[-2000:]))
             return EXIT_BUILD
 
@@ -190,6 +192,8 @@ def _build(board: Board) -> int:
         if code != 0:
             print(_red(f"[build] FAILED (exit {code})"))
             print(out[-2000:])
+            if j:
+                j.check("build", "failed", out[-300:].strip())
             return EXIT_BUILD
     warnings = [ln for ln in out.splitlines() if "warning:" in ln]
     tail = [ln for ln in out.splitlines() if ln.startswith(("[", "Memory region", "FLASH", "text"))][-4:]
@@ -198,7 +202,12 @@ def _build(board: Board) -> int:
     print(_green(f"[build] OK in {elapsed:.1f}s, {len(warnings)} warning(s)"))
     if not board.artifact.is_file():
         print(_red(f"[build] artifact missing after build: {board.artifact}"))
+        if j:
+            j.check("build", "failed", f"artifact missing after build: {board.artifact}")
         return EXIT_BUILD
+    if j:
+        j.check("build", "passed", f"OK in {elapsed:.1f}s, {len(warnings)} warning(s)",
+                duration_ms=int(elapsed * 1000))
     return EXIT_OK
 
 
@@ -221,22 +230,30 @@ def _console_port(board: Board) -> tuple[str | None, str]:
     return serialmon.resolve_console_port(board.serial_port, board.usb_vid, board.usb_pids)
 
 
-def _run_probes(board: Board, names: list[str] | None, conn) -> int:
+def _run_probes(board: Board, names: list[str] | None, conn,
+                j: records.VerifyJournal | None = None) -> int:
     """Run named probes (or all) on an open console connection. The string
     'all' selects every defined probe (used by --all-probes / the Stop hook)."""
     try:
         available = probe_mod.load_probes(board.yaml_path)
     except (OSError, yaml.YAMLError, probe_mod.ProbeError) as exc:
         print(_red(f"[probe] cannot load probes: {exc}"))
+        if j:
+            j.check("probes", "failed", f"cannot load probes: {exc}")
         return EXIT_ENV
     if not available:
         print(_red(f"[probe] no probes defined in {board.yaml_path.name}"))
+        if j:
+            j.check("probes", "failed", "no probes defined in the board profile")
         return EXIT_ENV
 
     selected = list(available) if names is None else names
     for name in selected:
         if name not in available:
             print(_red(f"[probe] unknown probe {name!r}; available: {list(available)}"))
+            if j:
+                j.check(f"probe:{name}", "failed",
+                        f"unknown probe; available: {list(available)}")
             return EXIT_ENV
 
     for name in selected:
@@ -245,31 +262,128 @@ def _run_probes(board: Board, names: list[str] | None, conn) -> int:
         result = probe_mod.run_probe(conn, probe)
         if not result.ok:
             print(_red(f"[probe] FAIL — {result.detail}"))
+            if j:
+                j.check(f"probe:{name}", "failed", result.detail)
+                j.add_evidence("probe-transcript", name, result.detail)
             return EXIT_PROBE_FAIL
         print(_green(f"[probe] {name}: PASS ({len(probe.steps)} steps)"))
+        if j:
+            j.check(f"probe:{name}", "passed", f"{len(probe.steps)} steps")
     return EXIT_OK
 
 
-def cmd_verify(board: Board, probe_names: list[str] | None, evidence: str | None = None) -> int:
+def _probe_plan(board: Board, probe_names: list[str] | None) -> list[str]:
+    """Planned per-probe check names — what the record EXPECTS to see run."""
+    if probe_names is None:
+        return []
+    if probe_names == ["all"]:
+        try:
+            return [f"probe:{n}" for n in probe_mod.load_probes(board.yaml_path)]
+        except Exception:
+            return ["probes"]          # load failure itself gets recorded
+    return [f"probe:{n}" for n in probe_names]
+
+
+def _write_verify_record(board: Board, j: records.VerifyJournal, rc: int) -> None:
+    """Persist the run's evidence record. Strictly auxiliary: a failure to
+    write must never change the verification outcome."""
+    try:
+        fingerprint = j.fingerprint or gatestate.tree_fingerprint(
+            board.firmware_dir, board.yaml_path)
+        firmware: dict = {
+            "dir": str(board.firmware_dir),
+            "git_sha": board.head_sha(),
+            "tree_fingerprint": fingerprint,
+            "artifact": str(board.artifact),
+        }
+        if board.artifact.is_file():
+            digest, size = records.sha256_file(board.artifact)
+            firmware["artifact_sha256"] = digest
+            firmware["artifact_bytes"] = size
+        j.note("firmware", firmware)
+        profile_sha, _ = records.sha256_file(board.yaml_path,
+                                             cap=gatestate._HASH_CAP_BYTES)
+        record = j.to_record(board, rc, records.status_word(rc),
+                             summary=_exit_summary(rc))
+        record["board"]["profile_sha256"] = profile_sha
+        path = records.write_record(record, board.firmware_dir, fingerprint)
+        print(_cyan(f"[record] {path.name}  ({records.summarize_record(record)})"))
+    except (OSError, ValueError) as exc:
+        print(_yellow(f"[record] could not persist verify record: {exc}"))
+
+
+def _exit_summary(rc: int) -> str:
+    return {
+        0: "board confirmed the firmware",
+        1: "build failed", 2: "flash failed",
+        3: "board stayed silent (no boot evidence)",
+        4: "boot error string on console",
+        5: "on-board identity != repo state",
+        6: "environment error — a required check could not run",
+        7: "functional probe failed",
+    }.get(rc, f"exit {rc}")
+
+
+def cmd_verify(board: Board, probe_names: list[str] | None,
+               evidence: str | None = None) -> int:
     mode = (evidence or board.evidence_mode or "auto").lower()
+    if mode not in ("auto", "uart", "swd"):
+        print(_red(f"[verify] invalid evidence mode {mode!r} (expected auto|uart|swd)"))
+        return EXIT_ENV
     if mode == "auto":
         mode = "uart" if _console_port(board)[0] else "swd"
 
-    if mode == "swd":
-        return _verify_swd(board, probe_names)
-    return _verify_uart(board, probe_names)
+    plan = (["console", "build", "flash", "boot", "identity"] if mode == "uart"
+            else ["build", "flash", "boot", "identity"])
+    plan += _probe_plan(board, probe_names)
+    # PRE-run identity: the same fingerprint the Stop hook decided on. A
+    # post-run computation would diverge whenever the build drops
+    # untracked-unignored artifacts (adversarial review F8).
+    try:
+        fingerprint = gatestate.tree_fingerprint(board.firmware_dir,
+                                                 board.yaml_path)
+    except Exception:
+        fingerprint = ""
+    j = records.VerifyJournal(plan, mode=mode, probe_names=probe_names,
+                              fingerprint=fingerprint)
+
+    # Crash net (adversarial review F1): an exception escaping a verify
+    # path used to skip the record entirely AND leak rc=1 (misread as
+    # BUILD_FAILED). Worst crashes leave evidence and keep the contract.
+    import traceback
+    try:
+        if mode == "swd":
+            rc = _verify_swd(board, probe_names, j)
+        else:
+            rc = _verify_uart(board, probe_names, j)
+    except Exception as exc:                  # KeyboardInterrupt passes through
+        traceback.print_exc()
+        print(_red(f"[verify] aborted: {type(exc).__name__}: {exc}"))
+        j.check("verify", "failed",
+                f"aborted: {type(exc).__name__}: {exc}")
+        rc = EXIT_ENV
+    _write_verify_record(board, j, rc)
+    return rc
 
 
-def _verify_swd(board: Board, probe_names: list[str] | None) -> int:
+def _verify_swd(board: Board, probe_names: list[str] | None,
+                j: records.VerifyJournal | None = None) -> int:
     """Boot gate through the ST-Link alone: fixed-address RAM signature.
     No serial cable needed. Probes explicitly requested via --probe /
     --all-probes (as the Stop hook does) MUST run: if the console is
     missing or unusable, verify FAILS (exit 6) — a check that didn't
-    happen must never count as a pass."""
+    happen must never count as a pass.
+
+    `j` (the evidence journal) is optional: direct callers without one
+    get a throwaway — records are only persisted by cmd_verify."""
+    if j is None:
+        j = records.VerifyJournal([], mode="swd", probe_names=probe_names)
     print(_cyan(f"[verify] {board.name}: build -> flash -> SWD signature"))
-    rc = _build(board)
+    rc = _build(board, j)
     if rc != EXIT_OK:
+        j.ensure_failed("build", f"exit {rc}")
         return rc
+    j.ensure_passed("build")
 
     # Flash WITHOUT starting, wipe the stale signature, then start: RAM is
     # not cleared by reset, so a surviving old-boot signature would lie.
@@ -278,13 +392,19 @@ def _verify_swd(board: Board, probe_names: list[str] | None) -> int:
     if not result.ok:
         print(_red("[flash] FAILED"))
         print(result.detail[-1200:])
+        j.check("flash", "failed", result.detail[-300:].strip())
         return EXIT_FLASH
+    wipe_note = ""
     if not flasher.write32(board.flash_connect, 0, board.sig_address):
+        wipe_note = "; WARNING: stale signature could not be wiped"
         print(_yellow("[verify] warning: could not wipe the old signature "
                       "(stale-identity false-pass window)"))
     if not flasher.start_app(board.flash_connect):
         print(_red("[flash] FAILED to start the application"))
+        j.check("flash", "failed", "start_app failed")
         return EXIT_FLASH
+    j.check("flash", "passed", "written+verified, signature wiped, started"
+            + wipe_note)
 
     print(_cyan(f"[verify] polling signature @ {board.sig_address:#010x} via {board.flash_connect}"))
     info, err = swdsig.wait_for_signature(
@@ -293,18 +413,27 @@ def _verify_swd(board: Board, probe_names: list[str] | None) -> int:
     if info is None:
         if "not supported" in err:
             print(_red(f"[verify] SIGNATURE LAYOUT MISMATCH: {err}"))
+            j.check("boot", "failed", f"signature layout mismatch: {err}")
             return EXIT_ENV
         print(_red(f"[verify] TIMEOUT: board never published its SWD signature ({err})"))
+        j.check("boot", "failed", f"timeout: no signature ({err})")
         return EXIT_BANNER_TIMEOUT
 
     print(_green(f"[verify] signature OK: git={info['git']} build={info['build']} "
                  f"flags={info['flags']:#x}"))
+    j.check("boot", "passed",
+            f"signature: git={info['git']} build={info['build']} flags={info['flags']:#x}")
+    j.add_evidence("swd-signature", f"RAM@{board.sig_address:#010x}",
+                   " ".join(f"{k}={v}" for k, v in sorted(info.items())))
 
     expected = board.head_sha()
     if expected and info["git"] != expected:
         print(_red(f"[verify] SHA MISMATCH: board runs {info['git']}, repo HEAD is {expected} "
                    "(rebuild after committing?)"))
+        j.check("identity", "failed",
+                f"board git={info['git']} != repo HEAD {expected}")
         return EXIT_SHA_MISMATCH
+    j.check("identity", "passed", f"git={info['git']} matches repo HEAD")
 
     if probe_names is not None:
         port, why = _console_port(board)
@@ -312,15 +441,24 @@ def _verify_swd(board: Board, probe_names: list[str] | None) -> int:
             print(_red("[verify] probes were explicitly requested but no console serial "
                        f"is available ({why}) — failing rather than passing unverified "
                        "(drop --probe/--all-probes, or connect the console UART)"))
+            for name in plan_probes(j):
+                j.check(name, "skipped", f"console unavailable: {why}")
             return EXIT_ENV
         try:
             conn = serialmon.open_flush(port, board.baudrate)
         except serial.SerialException as exc:
             print(_red(f"[verify] probes were explicitly requested but {port} cannot be "
                        f"opened ({exc}) — failing rather than passing unverified"))
+            for name in plan_probes(j):
+                j.check(name, "skipped", f"console open failed: {exc}")
             return EXIT_ENV
         try:
-            return _run_probes(board, None if probe_names == ["all"] else probe_names, conn)
+            prc = _run_probes(board, None if probe_names == ["all"] else probe_names,
+                              conn, j)
+            if prc == EXIT_OK:
+                for name in plan_probes(j):
+                    j.ensure_passed(name)
+            return prc
         finally:
             conn.close()
 
@@ -329,25 +467,61 @@ def _verify_swd(board: Board, probe_names: list[str] | None) -> int:
     return EXIT_OK
 
 
-def _check_banner_identity(board: Board, info: dict) -> int | None:
+def plan_probes(j: records.VerifyJournal) -> list[str]:
+    return [n for n in j.plan if n.startswith("probe:") or n == "probes"]
+
+
+def _check_banner_identity(board: Board, info: dict,
+                           j: records.VerifyJournal | None = None) -> int | None:
     """Compare the banner's identity fields against the board profile.
-    Returns an exit code on contradiction, None when consistent."""
+    Returns an exit code on contradiction, None when consistent.
+
+    Strictness (design-doc Phase 0): a field the banner pattern PROMISES
+    (a named group) must actually be present and non-empty in the match —
+    a legacy regex with an optional group could match a banner that omits
+    `git=`, and the old code silently skipped the sha comparison."""
+    promised = probe_mod.compile_pattern(board.banner_regex, anchor=False).groupindex
+    for field in ("board", "git"):
+        if field in promised and not info.get(field):
+            print(_red(f"[verify] IDENTITY INCOMPLETE: banner matched but the "
+                       f"promised field {field!r} is empty/missing"))
+            if j:
+                j.check("identity", "failed",
+                        f"banner promised {field!r} but the match lacks it")
+            return EXIT_SHA_MISMATCH
     got_board = info.get("board")
     if got_board and got_board != board.name:
         print(_red(f"[verify] BOARD MISMATCH: banner says board={got_board}, "
                    f"profile expects {board.name} — the verdict would not be "
                    "about the board you configured"))
+        if j:
+            j.check("identity", "failed",
+                    f"banner board={got_board} != profile {board.name}")
         return EXIT_SHA_MISMATCH
     expected = board.head_sha()
     got = info.get("git")
     if expected and got and expected != got:
         print(_red(f"[verify] SHA MISMATCH: board runs {got}, repo HEAD is {expected} "
                    "(rebuild after committing?)"))
+        if j:
+            j.check("identity", "failed",
+                    f"banner git={got} != repo HEAD {expected}")
         return EXIT_SHA_MISMATCH
+    if j:
+        j.check("identity", "passed",
+                f"board={info.get('board')} git={got or '(not promised)'}")
     return None
 
 
-def _verify_uart(board: Board, probe_names: list[str] | None) -> int:
+def _banner_line(transcript: str) -> str:
+    lines = [ln for ln in transcript.splitlines() if ln.strip()]
+    return lines[-1] if lines else ""
+
+
+def _verify_uart(board: Board, probe_names: list[str] | None,
+                 j: records.VerifyJournal | None = None) -> int:
+    if j is None:
+        j = records.VerifyJournal([], mode="uart", probe_names=probe_names)
     all_probes = probe_names == ["all"]
     title = "[verify] {b}: build -> flash -> boot banner" + (" -> probes" if probe_names is not None else "")
     print(_cyan(title.format(b=board.name)))
@@ -355,22 +529,29 @@ def _verify_uart(board: Board, probe_names: list[str] | None) -> int:
     port, why = _console_port(board)
     if port is None:
         print(_red(f"[verify] console serial port unresolved — {why}"))
+        j.check("console", "failed", f"serial port unresolved: {why}")
         return EXIT_ENV
     try:
         conn = serialmon.open_flush(port, board.baudrate)
     except serial.SerialException as exc:
         print(_red(f"[verify] cannot open {port}: {exc} — close any serial terminal "
                    "(串口助手/putty/VSCode serial monitor) holding the port, then retry"))
+        j.check("console", "failed", f"cannot open {port}: {exc}")
         return EXIT_ENV
+    j.check("console", "passed", f"{port} @ {board.baudrate} [{why}]")
 
     try:
-        rc = _build(board)
+        rc = _build(board, j)
         if rc != EXIT_OK:
+            j.ensure_failed("build", f"exit {rc}")
             return rc
+        j.ensure_passed("build")
 
         rc = cmd_flash(board)
         if rc != EXIT_OK:
+            j.check("flash", "failed", f"exit {rc} (see log)")
             return rc
+        j.check("flash", "passed", "written, verified, started")
 
         print(_cyan(f"[verify] waiting for boot banner on {port} "
                     f"(timeout {board.banner_timeout_s:.0f}s)"))
@@ -380,24 +561,32 @@ def _verify_uart(board: Board, probe_names: list[str] | None) -> int:
 
         if banner.error_hit:
             print(_red(f"[verify] BOOT ERROR: error pattern {banner.error_hit!r} in output"))
+            j.check("boot", "failed", f"error pattern {banner.error_hit!r} on console")
+            j.add_evidence("console-tail", port, banner.transcript[-1000:])
             return EXIT_BOOT_ERROR
         if not banner.matched:
             print(_red("[verify] TIMEOUT: board never printed the FLASHGATE-BOOT banner"))
             print("  last serial output:")
             for ln in banner.transcript.splitlines()[-5:]:
                 print(f"    | {ln}")
+            j.check("boot", "failed", "timeout: no banner within "
+                    f"{board.banner_timeout_s:.0f}s")
+            j.add_evidence("console-tail", port, banner.transcript[-1000:])
             return EXIT_BANNER_TIMEOUT
 
         info = banner.groups or {}
+        banner_line = banner.matched_line or _banner_line(banner.transcript)
         print(_green(f"[verify] banner OK: board={info.get('board')} git={info.get('git')} "
                      f"build={info.get('build')} rtos={info.get('rtos')}"))
+        j.check("boot", "passed", "banner: " + banner_line)
+        j.add_evidence("uart-banner", port, banner_line)
 
-        mismatch = _check_banner_identity(board, info)
+        mismatch = _check_banner_identity(board, info, j)
         if mismatch is not None:
             return mismatch
 
         if probe_names is not None:
-            return _run_probes(board, None if all_probes else probe_names, conn)
+            return _run_probes(board, None if all_probes else probe_names, conn, j)
 
         print(_green(f"[verify] PASS — the board itself confirms the firmware booted "
                      f"(git={info.get('git')})"))

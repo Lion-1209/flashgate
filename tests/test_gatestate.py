@@ -100,7 +100,15 @@ class TestUntrackedFingerprintCompleteness:
 
     def test_state_dir_writes_do_not_change_fingerprint(self, git_repo):
         from flashgate.gatestate import save_state, tree_fingerprint
-        save_state(git_repo, status="pass", fingerprint="x")   # state dir exists
+        # Clean-tree baseline FIRST: the first-ever .flashgate write adds a
+        # '?? .flashgate/' status line that must be filtered, or every
+        # repo's first PASS caches a fingerprint that never matches again
+        # (mutation M4: this test used to start after the dir existed and
+        # could not see the flip).
+        clean = tree_fingerprint(git_repo)
+        save_state(git_repo, status="pass", fingerprint="x")   # dir created
+        assert tree_fingerprint(git_repo) == clean, \
+            "first-ever .flashgate write must not flip the fingerprint"
         fp1 = tree_fingerprint(git_repo)
         save_state(git_repo, status="pass", fingerprint="y")   # timestamp moves
         assert tree_fingerprint(git_repo) == fp1, ".flashgate/ must stay out of the digest"
