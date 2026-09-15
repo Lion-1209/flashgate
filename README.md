@@ -48,6 +48,7 @@ including register readbacks (TIM3 CCR), not firmware self-reports:
 ```bash
 pip install -e .                 # Python 3.11+
 pip install -e ".[mcp]"          # optional MCP server
+pip install -e ".[bench]"        # optional remote bench (device-connect)
 
 flashgate doctor                 # ST-Link / serial / toolchain sanity
 flashgate verify --all-probes    # build → flash → evidence → sha → probes
@@ -227,9 +228,11 @@ full profile field reference.
 
 ## Status
 
-Boot gate, probe gate, Stop hook, MCP server, SWD signature channel — all
-implemented and validated on real hardware. Windows-first; Linux/macOS
-untested.
+Boot gate, probe gate, Stop hook, MCP server, SWD signature channel,
+verification records (per-check evidence with artifact hashes), and the
+remote bench over device-connect — all implemented and validated on real
+hardware, the remote bench cross-host (Wi-Fi laptop driving a wired
+bench, 2026-09-15). Windows-first; Linux/macOS untested.
 
 ## License
 
@@ -253,6 +256,10 @@ flashgate 回答一个很具体的问题：刚编译出来的固件，烧到板�
 - 版本身份带 `-dirty` 语义，验证通过意味着板上跑的就是当前工作区
 - 探针下真命令、断言硬件寄存器读回值；响应报的是实际状态不是回声，
   静默失效的设置第一步就会露馅
+- 每次验证（无论成败）都留一份证据记录：逐项检查结论、板子的原话、
+  产物哈希——事后可审计"当时验证的是什么、板子说了什么"
+- `bench-serve` 可以把整个台架挂上局域网：远程 agent 用 device-connect
+  协议发现它、请求真机验证、拿回带证据的结论（跨机实测通过）
 - Stop hook 挂进 Claude Code：agent 改了固件没过真机验证就说"完成"，
   会被拦下并收到板子的失败证词；同一棵坏树最多拦两次，之后放行但
   打警告，会话不会被卡死

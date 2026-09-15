@@ -20,7 +20,7 @@ on your desk.
 ```bash
 git clone https://github.com/Lion-1209/flashgate
 cd flashgate
-pip install -e ".[dev,mcp]"   # dev = pytest; mcp = MCP contract tests
+pip install -e ".[dev,mcp,bench]"   # dev = pytest; mcp = MCP contract tests; bench = device-connect front-end tests
 pytest -q                      # 60+ tests, no hardware needed
 ```
 

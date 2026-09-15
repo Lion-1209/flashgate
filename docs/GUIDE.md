@@ -24,6 +24,8 @@ flashgate 是一个命令行工具，用来回答一个很具体的问题：刚�
 9. [MCP server](#9-mcp-server)
 10. [排错](#10-排错)
 11. [已知限制](#11-已知限制)
+12. [验证记录（证据档案）](#12-验证记录证据档案)
+13. [远程台架（bench-serve）](#13-远程台架bench-serve)
 
 ## 1. 硬件准备
 
@@ -1009,6 +1011,64 @@ Linux/macOS 没测。签名通道的固件参考实现针对 STM32H7 的 DTCM �
 往其他芯片移植时要自己挑一块调试口直读且不经过缓存的内存。swd 通道
 没有功能探针。Stop hook 的审批行为跟 Claude Code 版本有关，以
 `/hooks` 的实际显示为准。
+
+## 12. 验证记录（证据档案）
+
+每次 `flashgate verify`——无论成功失败——都会在
+`<固件目录>/.flashgate/records/` 落一份 JSON 记录，文件名是
+`<UTC时间戳-毫秒>-<退出码>-<指纹前8位>.json`，`ls` 一眼就是审计日志。
+
+记录里有什么：
+
+- **逐项检查结论**（console/build/flash/boot/identity/probe:*）：
+  `passed`=执行且成立，`failed`=执行且不成立，`skipped`=没执行到
+  （带原因，比如"前一步已失败"）——没跑过的检查绝不静默缺席
+- **原始证据**：banner 原文、SWD 签名解析值、超时时的串口末尾输出、
+  失败探针的完整对话（含板子的原话）
+- **两重身份**：`tree_fingerprint` 是源码身份（树+档案+工具版本的
+  指纹，和 Stop hook 缓存判定用同一个值）；`artifact_sha256` 是构建
+  身份（固件里嵌了构建时间戳，同一棵树两次构建的产物哈希必然不同）
+- 工具版本、板卡档案哈希、起止时间
+
+MCP 的 `verify` 工具会把本次运行的记录内联返回（`data.record`）。
+格式规范见 [record-schema.md](record-schema.md)。
+
+两点注意：把 `.flashgate/` 放进固件仓库的 `.gitignore`（示例工程已
+放好），否则每次写记录都会扰动指纹缓存；记录写入失败只是警告，
+永远不会改变验证结论和退出码。
+
+## 13. 远程台架（bench-serve）
+
+装可选 extra 后，`bench-serve` 子命令把整台实验台变成局域网上的
+一个"设备"（基于 Arm 的 device-connect 协议，Zenoh 免 broker 发现）：
+
+```bash
+pip install "flashgate[bench]"
+export DEVICE_CONNECT_ALLOW_INSECURE=true        # 本地开发模式
+export DEVICE_CONNECT_DISCOVERY_MODE=d2d
+flashgate --board boards/apollo-h743.yaml bench-serve
+```
+
+远程调用方发现 `device_type=flashgate-bench` 后有四个函数可用：
+`describe_bench`（台架与探针清单）、`start_verify`（发起验证，立即
+返回 op_id）、`get_operation`（轮询到终态，终态快照带退出码和完整
+证据记录）、`cancel_operation`（仅在验证尚未开始时真正取消——执行中
+的验证绝不半途拆台硬件，请求会被记录为建议位）。
+
+三条使用纪律：
+
+- **判断成败只看 operation 内容**（state / exit_code / checks），
+  不看传输层 success——mesh 会把一切正常送达的回复包成
+  `success:true`，包括"台架忙"的拒绝（`{"error":"busy"}`）
+- **单播模式**：部分路由器不让组播跨有线/无线段。跨机发现不到但
+  ping 得通时，台架侧 `ZENOH_LISTEN=tcp/0.0.0.0:7447`、客户端侧
+  `MESSAGING_URLS=tcp/<台架IP>:7447`；防火墙放行对应端口
+- **一台台架只跑一个 bench-serve**：同档案的第二个实例会被启动锁
+  直接拒绝（否则两个同名服务会把远程调用劈裂、互抢串口）
+
+安全须知：D2D 模式零认证——同局域网内任何人都能发起 `start_verify`
+烧写这块板。家用台架没问题；共享环境请走 device-connect 的带认证
+基础设施模式。
 
 ---
 
