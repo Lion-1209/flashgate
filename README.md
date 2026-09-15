@@ -159,6 +159,13 @@ fingerprint identifies the SOURCE).
   same-named servers split-brained the mesh and raced each other for
   the board's serial port.
 
+**Third-party licensing**: the `bench` extra depends on
+[device-connect-edge](https://github.com/arm/device-connect)
+(Apache-2.0) as a pip dependency only — flashgate stays MIT, and no
+device-connect source is vendored into this repository (fixes go
+upstream as PRs). Commercial distributions that bundle the dependency
+must include its LICENSE and NOTICE files.
+
 **Security posture, stated plainly**: D2D mode is zero-authentication —
 anyone on the same LAN can discover the bench and `start_verify`, which
 FLASHES THE BOARD. Descriptions and records also carry local paths.
