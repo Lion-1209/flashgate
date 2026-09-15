@@ -125,3 +125,44 @@ class TestStartVerifyArgumentGuard:
             res = asyncio.run(drv.start_verify(bad))
             assert res["error"] == "invalid_argument", bad
         assert touched["n"] == 0, "malformed args must not reach hardware"
+
+
+class TestSingleInstanceLock:
+    """v0.7.1 field lesson: two bench-serves on one bench split-brain the
+    mesh under one device_id and race for the serial port. The lock is a
+    bound loopback socket — exclusive while alive, auto-released on
+    process death (no stale lock files to clean up)."""
+
+    def test_second_lock_same_fw_dir_rejected(self, tmp_path):
+        import pytest
+        from flashgate.bench_serve import acquire_bench_lock
+        lock = acquire_bench_lock(tmp_path)
+        try:
+            with pytest.raises(RuntimeError, match="one bench-serve per bench"):
+                acquire_bench_lock(tmp_path)
+        finally:
+            lock.close()
+        # released: acquirable again
+        again = acquire_bench_lock(tmp_path)
+        again.close()
+
+    def test_different_fw_dirs_lock_independently(self, tmp_path):
+        from flashgate.bench_serve import acquire_bench_lock
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        la = acquire_bench_lock(tmp_path / "a")
+        lb = acquire_bench_lock(tmp_path / "b")
+        la.close()
+        lb.close()
+
+    def test_serve_refuses_when_lock_held(self, tmp_path, monkeypatch, capsys):
+        from flashgate import bench_serve as bs
+        from tests.test_cli import make_board
+        board = make_board(tmp_path)
+        lock = bs.acquire_bench_lock(board.firmware_dir)
+        try:
+            rc = bs.serve(board)
+            assert rc == 2
+            assert "one bench-serve per bench" in capsys.readouterr().out
+        finally:
+            lock.close()

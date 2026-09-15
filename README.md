@@ -143,6 +143,22 @@ and per-check verdicts equal; `artifact_sha256` differs by design — it
 identifies the BUILD, which embeds its timestamp, while the tree
 fingerprint identifies the SOURCE).
 
+**Deployment notes** (from the first real cross-host test, wired host
++ Wi-Fi laptop, 2026-09-15):
+
+- Multicast discovery does not cross all wired↔wireless routers. If
+  discovery finds nothing across machines but `ping` works, switch to
+  unicast: on the bench host set `ZENOH_LISTEN=tcp/0.0.0.0:7447` before
+  `bench-serve`; on the client set `MESSAGING_URLS=tcp/<host-ip>:7447`.
+- Open UDP 7446 (multicast scouting) or TCP 7447 (unicast) inbound on
+  the host's firewall; a Wi-Fi client set to "Public network" blocks the
+  announcements it needs to receive.
+- **One bench-serve per bench**: a second instance for the same
+  firmware dir is refused at startup (a loopback lock socket, released
+  automatically when the process dies). Before the lock existed, two
+  same-named servers split-brained the mesh and raced each other for
+  the board's serial port.
+
 **Security posture, stated plainly**: D2D mode is zero-authentication —
 anyone on the same LAN can discover the bench and `start_verify`, which
 FLASHES THE BOARD. Descriptions and records also carry local paths.

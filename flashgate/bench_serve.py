@@ -23,10 +23,41 @@ transport success alone.
 from __future__ import annotations
 
 import asyncio
+import socket
+import zlib
+from pathlib import Path
 from typing import Optional
 
 from .bench import BenchBusyError, BenchDriver
 from .board import Board
+
+
+def _lock_port(fw_dir: Path) -> int:
+    return 17500 + (zlib.crc32(
+        str(fw_dir.resolve()).lower().encode("utf-8")) % 1000)
+
+
+def acquire_bench_lock(fw_dir: Path) -> socket.socket:
+    """OS-level single-instance lock per bench, auto-released when the
+    process dies (a bound socket cannot outlive its process).
+
+    Why: two bench-serves for the SAME firmware dir register the same
+    device_id on the mesh and split-brain every RPC — the losing process
+    races the winner for the board's serial port and surfaces as
+    access-denied (seen live in the first cross-host test, 2026-09-15).
+    Different boards (different fw dirs) lock different ports and may
+    share a host."""
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", _lock_port(fw_dir)))
+        s.listen(1)
+        return s
+    except OSError:
+        s.close()
+        raise RuntimeError(
+            f"another bench-serve for {fw_dir} appears to be running on "
+            f"this machine — one bench-serve per bench (the running one "
+            f"owns lock port {_lock_port(fw_dir)}; kill it first)")
 
 
 def _build_driver(bench: BenchDriver):
@@ -95,6 +126,12 @@ def serve(board: Board, device_id: str | None = None) -> int:
     except ImportError:
         print("bench-serve needs the optional dependency: "
               'pip install "flashgate[bench]" (device-connect-edge)')
+        return 2
+
+    try:
+        lock = acquire_bench_lock(board.firmware_dir)   # held for life
+    except RuntimeError as exc:
+        print(f"[bench-serve] {exc}")
         return 2
 
     bench = BenchDriver(board)
