@@ -652,6 +652,10 @@ def main(argv: list[str] | None = None) -> int:
     p_probe.add_argument("names", nargs="*", metavar="NAME",
                          help="probe names (default: all defined in the board profile)")
     sub.add_parser("console", help="live serial monitor")
+    p_bench = sub.add_parser(
+        "bench-serve", help="expose this bench over device-connect (optional extra: flashgate[bench])")
+    p_bench.add_argument("--device-id", default=None,
+                         help="device-connect id (default: flashgate-bench-<board>)")
 
     args = parser.parse_args(argv)
     try:
@@ -668,6 +672,9 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_verify(board, names, getattr(args, "evidence", None))
         if args.cmd == "probe":
             return cmd_probe(board, args.names or None)
+        if args.cmd == "bench-serve":
+            from .bench_serve import serve
+            return serve(board, args.device_id)
         simple = {
             "doctor": cmd_doctor, "build": cmd_build,
             "flash": cmd_flash, "console": cmd_console,

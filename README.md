@@ -114,6 +114,42 @@ firmware repo's `.gitignore` (the shipped example does), or every record
 write churns the fingerprint. A record that cannot be written is a
 warning, never a changed exit code — and a crashed run still leaves one.
 
+## Remote bench (device-connect, Stage 2)
+
+Expose this bench to any agent on the network over Arm's device-connect
+protocol — four named RPCs over a `BenchDriver` core, nothing else (no
+arbitrary shell, no path arguments; the board a bench serves is fixed by
+its profile):
+
+```bash
+pip install "flashgate[bench]"          # optional extra -> device-connect-edge
+DEVICE_CONNECT_ALLOW_INSECURE=true DEVICE_CONNECT_DISCOVERY_MODE=d2d   flashgate --board boards/apollo-h743.yaml bench-serve
+```
+
+Remote callers discover `device_type=flashgate-bench` and use
+`describe_bench` / `start_verify` / `get_operation` / `cancel_operation`.
+`start_verify` returns an `op_id` immediately (single verify at a time —
+a client retrying over a flaky network can never trigger a second
+flash); poll `get_operation` to the terminal snapshot, which carries the
+exit code and the run's full evidence record.
+
+**The red line for every consumer**: the mesh wraps any normally-delivered
+reply as `success: true` — including a busy bench answering
+`{"error": "busy"}`. Judge verification ONLY by the operation payload
+(`state` / `exit_code` / the record's checks), never by transport
+success. Acceptance on the Apollo bench: the same firmware input
+produces identical local and remote domain results (tree fingerprint
+and per-check verdicts equal; `artifact_sha256` differs by design — it
+identifies the BUILD, which embeds its timestamp, while the tree
+fingerprint identifies the SOURCE).
+
+**Security posture, stated plainly**: D2D mode is zero-authentication —
+anyone on the same LAN can discover the bench and `start_verify`, which
+FLASHES THE BOARD. Descriptions and records also carry local paths.
+Fine for a home bench; for anything shared, put the mesh behind
+authenticated infrastructure (device-connect server mode) — Stage 4
+work.
+
 ## Install as a Claude Code plugin
 
 The repo doubles as a Claude Code plugin: the Stop hook, an MCP server,

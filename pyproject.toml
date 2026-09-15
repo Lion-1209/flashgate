@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flashgate"
-version = "0.6.1"
+version = "0.7.0"
 description = "Hardware-in-the-loop verification gate: your agent can't claim the firmware works until the board says so."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,7 @@ Issues = "https://github.com/Lion-1209/flashgate/issues"
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.2,<3"]
+bench = ["device-connect-edge>=0.2.5,<0.3"]
 dev = ["pytest>=8"]
 
 [project.scripts]

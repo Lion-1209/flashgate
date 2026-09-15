@@ -49,6 +49,12 @@ probe:*`; swd runs drop `console`. Steps after the first failure are
 ## Guarantees
 
 - A record exists for **failed** runs, not only passing ones.
+- Two identities, two granularities: `tree_fingerprint` identifies the
+  SOURCE (stable across builds of one tree state);
+  `artifact_sha256` identifies the BUILD (the firmware embeds its build
+  timestamp, so two builds of one tree yield different artifacts —
+  local and remote runs of the same tree match on fingerprint, not on
+  artifact hash).
 - `firmware.tree_fingerprint` is computed BEFORE the run — the same
   pre-run identity the Stop hook decides on (HEAD + tracked diff +
   untracked content + profile content + tool version) — so a record can
