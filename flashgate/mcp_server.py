@@ -270,15 +270,16 @@ def verify(board: str | None = None) -> results.Result:
     except BoardError as exc:
         return results.failure(str(exc), code=results.PROFILE_NOT_FOUND,
                                policy=P_VERIFY)
-    t0 = time.monotonic()
+    pre_last = records.LAST       # identity snapshot beats a monotonic
     rc, log = _capture(cli_mod.cmd_verify, board_obj, ["all"])
     result = _cli_result("verify", rc, log, P_VERIFY)
     # Attach THIS run's record — the in-process registry, never a blind
-    # mtime pick (adversarial review F3: a failed run whose own record
-    # write broke must not carry some earlier run's green record).
+    # mtime pick (adversarial review F3), and by IDENTITY against the
+    # pre-call snapshot: a run whose own record write broke must not
+    # inherit a same-tick stale record (bench FINDING-1's twin, F7).
     try:
         last = records.LAST
-        if (last is not None and last["at"] >= t0
+        if (last is not None and last is not pre_last
                 and Path(last["fw_dir"]) == board_obj.firmware_dir):
             result.data["record"] = last["record"]
             result.data["record_dir"] = str(records.records_dir(board_obj.firmware_dir))
