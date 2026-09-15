@@ -6,6 +6,7 @@ record-level echo of the gate's core rule.
 """
 
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -233,3 +234,62 @@ class TestCrashNetAndUniqueness:
         # compare by path content, NOT latest_record's mtime order —
         # same-tick writes make that ordering flaky on some filesystems
         assert _json.loads(p2.read_text(encoding="utf-8"))["record_id"] == p2.stem
+
+
+class TestRetention:
+    """Architecture-doc open question #2: records must not grow unbounded."""
+
+    def test_prune_keeps_newest_cap(self, tmp_path, monkeypatch):
+        from flashgate import records as rec
+        monkeypatch.setattr(rec, "MAX_RECORDS", 5)
+        for i in range(8):
+            j = rec.VerifyJournal(["build"], mode="swd", probe_names=None)
+            j.check("build", "passed")
+            rec.write_record(j.to_record(_board_stub(), i % 8, "failed", "x"),
+                             tmp_path, fingerprint=f"{i:064d}")
+        files = sorted(rec.records_dir(tmp_path).glob("*.json"))
+        assert len(files) == 5
+        kept = [json.loads(f.read_text(encoding="utf-8"))["run"]["exit_code"]
+                for f in files]
+        assert kept == [3, 4, 5, 6, 7]      # the five NEWEST by mtime
+
+    def test_prune_never_breaks_writing(self, tmp_path, monkeypatch):
+        import pytest
+        from flashgate import records as rec
+        monkeypatch.setattr(rec, "MAX_RECORDS", 2)
+        for i in range(4):
+            j = rec.VerifyJournal(["build"], mode="swd", probe_names=None)
+            j.check("build", "passed")
+            path = rec.write_record(
+                j.to_record(_board_stub(), 0, "succeeded", "x"),
+                tmp_path, fingerprint=f"{i:064d}")
+            assert path.exists()
+
+
+class TestPruneGuards:
+    """Adversarial-round fixes: the just-written record survives an NTP
+    clock rollback (R3); retention stays best-effort, never fatal."""
+
+    def test_just_written_survives_clock_rollback(self, tmp_path, monkeypatch):
+        import os
+        from datetime import datetime, timedelta
+        from flashgate import records as rec
+        monkeypatch.setattr(rec, "MAX_RECORDS", 3)
+        # three records whose mtimes are ONE HOUR IN THE FUTURE
+        for i in range(3):
+            j = rec.VerifyJournal(["build"], mode="swd", probe_names=None)
+            j.check("build", "passed")
+            p = rec.write_record(j.to_record(_board_stub(), 0, "succeeded", "x"),
+                                 tmp_path, fingerprint=f"{i:064d}")
+            future = datetime.now() + timedelta(hours=1)
+            os.utime(p, (future.timestamp(), future.timestamp()))
+        # a fresh write under the rolled-back clock must survive its own prune
+        j = rec.VerifyJournal(["build"], mode="swd", probe_names=None)
+        j.check("build", "passed")
+        fresh = rec.write_record(j.to_record(_board_stub(), 7, "failed", "x"),
+                                 tmp_path, fingerprint="ff" * 32)
+        assert fresh.exists(), "the just-written record must never be pruned"
+        # (latest_record sorts by mtime, so the future-stamped files win —
+        # correct behavior under clock skew; the invariant is survival)
+        import json as _json
+        assert _json.loads(fresh.read_text(encoding="utf-8"))["record_id"] == fresh.stem

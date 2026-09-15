@@ -347,3 +347,55 @@ class TestHardening:
             bench_mod.probe_mod.load_probes = orig
         assert info["probes"] == []
         assert "bad probes yaml" in info["probes_error"]
+
+
+class TestCompletionCallback:
+    def test_notified_on_success_and_failure(self, tmp_path):
+        board = make_board(tmp_path)
+        events = []
+        d = BenchDriver(board, verify_fn=lambda b, n: len(events))
+        d.set_on_complete(lambda snap: events.append((snap["op_id"], snap["state"])))
+        d.wait(d.start_verify()["op_id"], 5)
+        d.wait(d.start_verify()["op_id"], 5)
+        assert [s for _, s in events] == ["succeeded", "failed"]
+
+    def test_notified_on_pre_start_cancel(self, tmp_path):
+        from flashgate.bench import _Operation
+        board = make_board(tmp_path)
+        events = []
+        d = BenchDriver(board, verify_fn=lambda b, n: 0)
+        d.set_on_complete(lambda snap: events.append(snap["state"]))
+        with d._lock:
+            op = _Operation(op_id="op-x", created_at="now")
+            d._ops[op.op_id] = op
+            d._current = op
+        assert d.cancel_operation("op-x") is True
+        assert events == ["cancelled"]
+
+    def test_callback_exception_swallowed(self, tmp_path):
+        board = make_board(tmp_path)
+
+        def boom(snap):
+            raise RuntimeError("callback bug")
+
+        d = BenchDriver(board, verify_fn=lambda b, n: 0)
+        d.set_on_complete(boom)
+        done = d.wait(d.start_verify()["op_id"], 5)
+        assert done["state"] == "succeeded"          # bench unaffected
+
+
+class TestCallbackGuard:
+    """Mutation P5: a callback exception must not even surface as an
+    unhandled-thread-exception warning."""
+
+    @pytest.mark.filterwarnings(
+        "error::pytest.PytestUnhandledThreadExceptionWarning")
+    def test_callback_exception_no_thread_warning(self, tmp_path):
+        board = make_board(tmp_path)
+
+        def boom(snap):
+            raise RuntimeError("callback bug")
+
+        d = BenchDriver(board, verify_fn=lambda b, n: 0)
+        d.set_on_complete(boom)
+        assert d.wait(d.start_verify()["op_id"], 5)["state"] == "succeeded"

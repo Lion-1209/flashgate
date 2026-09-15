@@ -1033,9 +1033,11 @@ Linux/macOS 没测。签名通道的固件参考实现针对 STM32H7 的 DTCM �
 MCP 的 `verify` 工具会把本次运行的记录内联返回（`data.record`）。
 格式规范见 [record-schema.md](record-schema.md)。
 
-两点注意：把 `.flashgate/` 放进固件仓库的 `.gitignore`（示例工程已
+三点注意：把 `.flashgate/` 放进固件仓库的 `.gitignore`（示例工程已
 放好），否则每次写记录都会扰动指纹缓存；记录写入失败只是警告，
-永远不会改变验证结论和退出码。
+永远不会改变验证结论和退出码；目录自动只保留最新 500 份记录，
+旧的在每次写入后被清理。想给脚本消费：`flashgate verify --json`
+会把本次记录以纯 JSON 打到 stdout（人读日志转去 stderr）。
 
 ## 13. 远程台架（bench-serve）
 
@@ -1064,7 +1066,10 @@ flashgate --board boards/apollo-h743.yaml bench-serve
   ping 得通时，台架侧 `ZENOH_LISTEN=tcp/0.0.0.0:7447`、客户端侧
   `MESSAGING_URLS=tcp/<台架IP>:7447`；防火墙放行对应端口
 - **一台台架只跑一个 bench-serve**：同档案的第二个实例会被启动锁
-  直接拒绝（否则两个同名服务会把远程调用劈裂、互抢串口）
+  直接拒绝（否则两个同名服务会把远程调用劈裂、互抢串口）；
+  停服务不用找进程——`flashgate --board <档案> bench-serve --stop`
+  （会先排空在跑的验证再退出）；每个 operation 到终态时台架还会
+  发 `verify_completed` 事件，不想轮询可以订阅
 
 安全须知：D2D 模式零认证——同局域网内任何人都能发起 `start_verify`
 烧写这块板。家用台架没问题；共享环境请走 device-connect 的带认证

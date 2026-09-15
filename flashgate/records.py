@@ -30,6 +30,12 @@ if TYPE_CHECKING:                     # stdlib-only at runtime (CLI dep);
 RECORDS_SCHEMA_VERSION = "1.0"
 RECORDS_DIRNAME = ".flashgate/records"
 
+# Retention: records are small (a few KB each), but a bench left running
+# for months would grow the dir without bound (architecture doc open
+# question #2). Oldest files are pruned past the cap; the newest PASS
+# and the running audit window are always preserved well inside it.
+MAX_RECORDS = 500
+
 # In-process registry of the record written by the LAST write_record call.
 # The MCP server (which runs cmd_verify in-process) uses it to attach THIS
 # run's record — never a stale one picked blindly by mtime.
@@ -219,7 +225,40 @@ def write_record(record: dict, fw_dir: Path, fingerprint: str = "") -> Path:
                     encoding="utf-8")
     LAST = {"path": path, "record": record, "fw_dir": fw_dir,
             "at": time.monotonic()}
+    _prune(fw_dir, exempt=path)
     return path
+
+
+def _prune(fw_dir: Path, keep: int | None = None,
+           exempt: Path | None = None) -> None:
+    """Keep only the newest `keep` records (mtime order). Best-effort:
+    a file that cannot be deleted is skipped — retention must never
+    break record writing. `keep=None` resolves MAX_RECORDS at call time
+    (a plain default arg would freeze the constant at import)."""
+    if keep is None:
+        keep = MAX_RECORDS
+    directory = records_dir(fw_dir)
+    try:
+        # Secondary key = filename (its timestamp prefix): rapid writes
+        # land on the same mtime tick and a glob-order tiebreak could
+        # judge the JUST-WRITTEN file as oldest (flake found by the
+        # mutation round's baseline runs).
+        candidates = sorted(directory.glob("*.json"),
+                             key=lambda p: (p.stat().st_mtime, p.name))
+        excess = candidates[:-keep] if keep else []
+        if exempt is not None:
+            # After an NTP clock rollback every EXISTING file looks
+            # "newer" than this one — the just-written record may land in
+            # the excess list; drop it from the DELETION list only (it
+            # still counts toward the cap, so steady state stays exact).
+            excess = [f for f in excess if f != exempt]
+    except OSError:
+        return
+    for stale in excess:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
 
 
 def latest_record(fw_dir: Path) -> dict | None:

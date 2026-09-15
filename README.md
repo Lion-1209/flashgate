@@ -114,6 +114,9 @@ tree+profile+tool-version identity the verdict applies to. The MCP
 firmware repo's `.gitignore` (the shipped example does), or every record
 write churns the fingerprint. A record that cannot be written is a
 warning, never a changed exit code — and a crashed run still leaves one.
+The newest ~500 records are kept (best-effort pruning). `flashgate verify
+--json` prints this run's record as pure-ASCII JSON on stdout (human logs
+move to stderr) for scripting — safe on any console codepage.
 
 ## Remote bench (device-connect, Stage 2)
 
@@ -128,11 +131,16 @@ DEVICE_CONNECT_ALLOW_INSECURE=true DEVICE_CONNECT_DISCOVERY_MODE=d2d   flashgate
 ```
 
 Remote callers discover `device_type=flashgate-bench` and use
-`describe_bench` / `start_verify` / `get_operation` / `cancel_operation`.
+`describe_bench` / `start_verify` / `get_operation` / `cancel_operation`,
+plus a `verify_completed` event per operation at its terminal state (an
+operation drained during server shutdown does not emit one — polling
+remains the authoritative contract).
 `start_verify` returns an `op_id` immediately (single verify at a time —
 a client retrying over a flaky network can never trigger a second
 flash); poll `get_operation` to the terminal snapshot, which carries the
-exit code and the run's full evidence record.
+exit code and the run's full evidence record. Stop the server without
+hunting PIDs: `flashgate --board <profile> bench-serve --stop` (it
+drains the in-flight operation, then exits).
 
 **The red line for every consumer**: the mesh wraps any normally-delivered
 reply as `success: true` — including a busy bench answering

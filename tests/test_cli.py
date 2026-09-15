@@ -281,3 +281,77 @@ class TestUartBuildFailRecord:
         assert by_name["console"]["status"] == "passed"
         assert by_name["build"]["status"] == "failed"
         assert by_name["identity"]["status"] == "skipped"
+
+
+class TestVerifyJsonFlag:
+    def test_json_stdout_pure_record(self, tmp_path, monkeypatch, capsys):
+        from flashgate import records as rec
+        board = make_board(tmp_path)
+        monkeypatch.setattr(cli, "_console_port", lambda b: (None, "no serial"))
+        monkeypatch.setattr(cli, "_build", lambda b, j=None: cli.EXIT_BUILD)
+        rc = cli.main(["--board", str(board.yaml_path), "verify", "--json"])
+        assert rc == cli.EXIT_BUILD
+        out = capsys.readouterr()
+        import json as _json
+        payload = _json.loads(out.out.strip().splitlines()[-1])
+        assert payload["run"]["exit_code"] == 1
+        by_name = {c["name"]: c for c in payload["checks"]}
+        assert by_name["build"]["status"] == "failed"
+        assert by_name["identity"]["status"] == "skipped"
+        assert "[verify]" in out.err                  # human logs on stderr
+
+
+class TestVerifyJsonGuard:
+    """Mutation P4: a stale LAST entry from ANOTHER firmware dir must not
+    be printed as this run's record."""
+
+    def test_foreign_last_not_printed(self, tmp_path, monkeypatch, capsys):
+        import json as _json
+        from flashgate import records as rec
+        board = make_board(tmp_path)
+        rec.LAST = {"path": None, "fw_dir": "Z:/somewhere-else",
+                    "record": {"run": {"exit_code": 0}}, "at": 0.0}
+
+        def no_write(b, names, evidence=None):
+            return 7                      # fails, writes nothing
+
+        monkeypatch.setattr(cli, "cmd_verify", no_write)
+        rc = cli.main(["--board", str(board.yaml_path), "verify", "--json"])
+        assert rc == 7
+        payload = _json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert payload == {"error": "no record written", "exit_code": 7}
+
+    def test_stdout_carries_no_human_logs(self, tmp_path, monkeypatch, capsys):
+        board = make_board(tmp_path)
+        monkeypatch.setattr(cli, "_console_port", lambda b: (None, "no serial"))
+        monkeypatch.setattr(cli, "_build", lambda b, j=None: cli.EXIT_BUILD)
+        cli.main(["--board", str(board.yaml_path), "verify", "--json"])
+        out = capsys.readouterr().out
+        assert "[verify]" not in out and "[build]" not in out
+
+
+class TestJsonEncodingGuard:
+    """Adversarial R1: the JSON must survive a non-UTF-8 consumer pipe —
+    U+FFFD from serial noise met cp936 and used to wipe stdout, exit 1."""
+
+    def test_json_output_is_pure_ascii(self, tmp_path, monkeypatch, capsys):
+        import json as _json
+        from flashgate import records as rec
+        board = make_board(tmp_path)
+
+        def noisy(b, names, evidence=None):
+            j = rec.VerifyJournal(["boot"], mode="uart", probe_names=names)
+            j.check("boot", "failed")
+            j.add_evidence("console-tail", "COM3",
+                           "noise \ufffd 拒绝访问 \ufffd")
+            r = j.to_record(b, 3, "timed_out", "x")
+            rec.write_record(r, b.firmware_dir, fingerprint="ee" * 32)
+            return 3
+
+        monkeypatch.setattr(cli, "cmd_verify", noisy)
+        rc = cli.main(["--board", str(board.yaml_path), "verify", "--json"])
+        assert rc == 3
+        raw = capsys.readouterr().out.strip().splitlines()[-1]
+        raw.encode("ascii")                       # must not raise
+        payload = _json.loads(raw)
+        assert "\ufffd" in str(payload)           # content survives, escaped

@@ -166,3 +166,92 @@ class TestSingleInstanceLock:
             assert "one bench-serve per bench" in capsys.readouterr().out
         finally:
             lock.close()
+
+
+class TestStopChannel:
+    def test_stop_signals_live_listener(self, tmp_path):
+        from pathlib import Path as P
+        from flashgate.bench_serve import (_start_lock_listener,
+                                           acquire_bench_lock, stop_bench)
+        signalled = []
+        # interrupt is called with NO arguments (like _thread.interrupt_main)
+        lock = acquire_bench_lock(tmp_path)
+        try:
+            thread = _start_lock_listener(
+                lock, interrupt=lambda: signalled.append("FIRED"))
+            assert stop_bench(tmp_path) is True
+            thread.join(timeout=3)
+            assert not thread.is_alive()
+            assert signalled == ["FIRED"]   # the stop signal fired once
+        finally:
+            lock.close()
+
+    def test_stop_without_holder_is_false(self, tmp_path):
+        from flashgate.bench_serve import stop_bench
+        (tmp_path / "free").mkdir(exist_ok=True)
+        assert stop_bench(tmp_path / "free") is False
+
+    def test_cli_stop_without_server_exit_2(self, tmp_path, monkeypatch, capsys):
+        from flashgate import cli
+        board = make_board(tmp_path)
+        rc = cli.main(["--board", str(board.yaml_path), "bench-serve", "--stop"])
+        assert rc == 2
+        assert "no bench-serve" in capsys.readouterr().out
+
+
+class TestCompletedEventWiring:
+    def test_operation_done_noop_without_loop(self, tmp_path):
+        board = make_board(tmp_path)
+        bench = BenchDriver(board, verify_fn=lambda b, n: 0)
+        drv = _build_driver(bench)(bench)
+        drv._operation_done({"op_id": "x", "state": "succeeded"})  # no crash
+
+    def test_loop_captured_on_first_rpc(self, tmp_path):
+        board = make_board(tmp_path)
+        bench = BenchDriver(board, verify_fn=lambda b, n: 0)
+        drv = _build_driver(bench)(bench)
+        assert drv._loop is None
+        asyncio.run(drv.describe_bench())
+        assert drv._loop is not None
+
+
+class TestEventAndStopGuards:
+    """Mutation P6/P8: the loop guard must actually skip scheduling, and
+    stop_bench must not claim success without an ok ack."""
+
+    def test_no_scheduling_without_loop(self, tmp_path, monkeypatch):
+        board = make_board(tmp_path)
+        bench = BenchDriver(board, verify_fn=lambda b, n: 0)
+        drv = _build_driver(bench)(bench)
+        calls = []
+        monkeypatch.attr_target = None
+        import flashgate.bench_serve as bs
+        monkeypatch.setattr(
+            bs.asyncio, "run_coroutine_threadsafe",
+            lambda coro, loop: calls.append(loop))
+        drv._operation_done({"op_id": "x", "state": "succeeded"})
+        assert calls == []                 # loop None: nothing scheduled
+        import threading
+        loop = asyncio.new_event_loop()
+        t = threading.Thread(target=loop.run_forever, daemon=True)
+        t.start()
+        try:
+            drv._loop = loop               # as _remember_loop would
+            drv._operation_done({"op_id": "y", "state": "failed"})
+            assert len(calls) == 1 and calls[0] is loop
+            loop.call_soon_threadsafe(loop.stop)
+        finally:
+            t.join(2)
+            loop.close()
+
+    def test_stop_bench_false_without_ok_ack(self, tmp_path):
+        import socket as pysocket
+        from flashgate.bench_serve import _lock_port, stop_bench
+        # an impostor holds the port but does not speak the protocol
+        impostor = pysocket.socket()
+        impostor.bind(("127.0.0.1", _lock_port(tmp_path)))
+        impostor.listen(1)
+        try:
+            assert stop_bench(tmp_path) is False
+        finally:
+            impostor.close()

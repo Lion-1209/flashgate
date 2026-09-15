@@ -68,6 +68,9 @@ probe:*`; swd runs drop `console`. Steps after the first failure are
   fingerprint and the PASS cache stops hitting (fail-safe, wasteful).
 - Record writing is auxiliary: an I/O failure is reported as a warning and
   never changes the verification outcome or exit code.
+- Retention: at most the newest 500 records are kept; older ones are
+  pruned automatically after each write (best-effort — a file that
+  cannot be deleted is skipped).
 - A run that CRASHES (unexpected exception) still leaves a record — a
   `verify` check entry names the exception — and returns exit 6, keeping
   the CLI contract instead of leaking a raw traceback exit code. A run

@@ -110,10 +110,12 @@ class _Operation:
 class BenchDriver:
     """Single-board bench: owns one in-flight verify and its history."""
 
-    def __init__(self, board: Board, verify_fn: VerifyFn | None = None):
+    def __init__(self, board: Board, verify_fn: VerifyFn | None = None,
+                 on_complete: "Callable[[dict], None] | None" = None):
         self._board = board
         self._verify_fn = verify_fn or (
             lambda b, names: cli_mod.cmd_verify(b, names))
+        self._on_complete = on_complete    # auxiliary: see set_on_complete
         self._lock = threading.Lock()
         self._ops: dict[str, _Operation] = {}
         self._threads: dict[str, threading.Thread] = {}
@@ -127,6 +129,22 @@ class BenchDriver:
                     f"in this process — one driver per firmware dir "
                     f"(single-flight and record association both assume it)")
             _DRIVERS[key] = self
+
+    def set_on_complete(self, cb: "Callable[[dict], None] | None") -> None:
+        """Register a best-effort completion callback: invoked once with
+        the terminal snapshot when an operation reaches succeeded/failed/
+        cancelled. Exceptions in the callback are swallowed —
+        notification must never affect the operation or the bench (the
+        RPC front-end uses this to emit verify_completed events)."""
+        self._on_complete = cb
+
+    def _notify(self, op: _Operation) -> None:
+        if self._on_complete is None:
+            return
+        try:
+            self._on_complete(op.snapshot())
+        except Exception:
+            pass
 
     # ------------------------------------------------------ describe_bench
     def describe(self) -> dict:
@@ -200,9 +218,14 @@ class BenchDriver:
                 op.state = "cancelled"
                 op.finished_at = _iso()
                 op.summary = "cancelled before execution"
-                return True
-            op.cancel_requested = True
-            return False
+                cancelled = True
+            else:
+                cancelled = False
+                op.cancel_requested = True
+        if cancelled:
+            self._notify(op)                 # outside the lock: a custom
+            return True                      # callback may query the bench
+        return False
 
     # ------------------------------------------------------ wait (helper)
     def wait(self, op_id: str, timeout_s: float = 600.0) -> dict | None:
@@ -237,6 +260,7 @@ class BenchDriver:
                     op.state = "failed"
                     op.error = ((op.error + " | ") if op.error else "") + \
                         "worker exited without a verdict"
+            self._notify(op)
 
     def _attach_record(self, op: _Operation) -> None:
         """Attach THIS run's evidence record via the in-process registry.

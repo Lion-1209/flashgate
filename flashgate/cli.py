@@ -10,6 +10,9 @@ Exit-code contract (the M3 Stop hook enforces these):
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
+import json
 import os
 import re
 import shutil
@@ -648,6 +651,9 @@ def main(argv: list[str] | None = None) -> int:
                           help="run every probe defined in the board profile")
     p_verify.add_argument("--evidence", choices=["uart", "swd", "auto"],
                           help="boot-evidence channel (default: board profile evidence.mode)")
+    p_verify.add_argument("--json", action="store_true",
+                          help="print this run's evidence record as JSON on "
+                               "stdout (human logs move to stderr)")
     p_probe = sub.add_parser("probe", help="run probes against running firmware")
     p_probe.add_argument("names", nargs="*", metavar="NAME",
                          help="probe names (default: all defined in the board profile)")
@@ -656,6 +662,10 @@ def main(argv: list[str] | None = None) -> int:
         "bench-serve", help="expose this bench over device-connect (optional extra: flashgate[bench])")
     p_bench.add_argument("--device-id", default=None,
                          help="device-connect id (default: flashgate-bench-<board>)")
+    p_bench.add_argument("--stop", action="store_true",
+                         help="signal the running bench-serve for this "
+                              "board to stop (drains, then exits) instead "
+                              "of starting a new one")
 
     args = parser.parse_args(argv)
     try:
@@ -669,11 +679,35 @@ def main(argv: list[str] | None = None) -> int:
             names: list[str] | None = args.probe
             if args.all_probes:
                 names = ["all"]
+            if getattr(args, "json", False):
+                # stdout is the machine channel: human logs go to stderr
+                with contextlib.redirect_stdout(sys.stderr):
+                    rc = cmd_verify(board, names, getattr(args, "evidence", None))
+                last = records.LAST
+                if last is not None and Path(last["fw_dir"]) == board.firmware_dir:
+                    # ensure_ascii (default): the JSON must survive ANY
+                    # consumer codepage — a cp936 pipe meeting U+FFFD from
+                    # serial noise used to raise UnicodeEncodeError, wipe
+                    # stdout and exit 1, which scripts misread as BUILD
+                    # FAILED (adversarial review R1).
+                    print(json.dumps(last["record"]))
+                else:
+                    print(json.dumps({"error": "no record written",
+                                      "exit_code": rc}))
+                return rc
             return cmd_verify(board, names, getattr(args, "evidence", None))
         if args.cmd == "probe":
             return cmd_probe(board, args.names or None)
         if args.cmd == "bench-serve":
-            from .bench_serve import serve
+            from .bench_serve import serve, stop_bench
+            if args.stop:
+                if stop_bench(board.firmware_dir):
+                    print("[bench-serve] stop signalled — the server drains "
+                          "its in-flight operation, then exits")
+                    return 0
+                print("[bench-serve] no bench-serve is holding the lock for "
+                      f"{board.firmware_dir}")
+                return 2
             return serve(board, args.device_id)
         simple = {
             "doctor": cmd_doctor, "build": cmd_build,
