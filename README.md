@@ -12,6 +12,26 @@ with a non-zero exit code and a reason.
 build → flash over ST-Link → board boots → evidence → probes → exit code
 ```
 
+A remote agent driving the bench over the network (Wi-Fi laptop → wired
+bench, OpenOCD backend) — real output:
+
+```
+$ flashgate --board apollo-openocd.yaml verify --all-probes
+[verify] apollo-h743: build -> flash -> boot banner -> probes
+[build] OK in 1.3s, 0 warning(s)
+[flash] Apollo.bin @ 0x08000000 via openocd:port=SWD
+[flash] OK (written, verified, started)
+FLASHGATE-BOOT board=apollo-h743 git=e87efd8-dirty build=2026-09-16T02:48:14Z rtos=FreeRTOS
+[probe] led-demo: LED state-machine set/readback + PWM CCR sanity
+    step 1: led-demo> led0 breath
+    board: OK led0 state=BREATH
+    step 2: led-demo> led0?
+    board: OK led0 state=BREATH ccr=691          <- hardware register readback
+    ...
+[probe] led-demo: PASS (5 steps)
+[record] 20260916T024814701-0-035e45ea.json  (succeeded exit=0 [6/6 checks])
+```
+
 [中文说明](#中文说明) | [使用说明（推荐先读这份）](docs/GUIDE.md)
 
 ## How the board testifies
