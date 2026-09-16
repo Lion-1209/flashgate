@@ -239,17 +239,24 @@ class TestInjectionAndDelegation:
     """Q4/Q6 mutation survivors + F1/F2 injection rejections."""
 
     def test_program_command_is_forward_slashed_and_braced(self, monkeypatch):
+        import os
+        import pathlib
         b = backends.OpenOcdBackend(mcu="STM32H743")
         seen = {}
         monkeypatch.setattr(b, "_run",
                             lambda cmds: (seen.update(cmds=cmds) or (0, "")))
-        import pathlib
-        fake_bin = pathlib.PureWindowsPath(r"E:\dir\na me\App.bin")
         monkeypatch.setattr(backends.Path, "is_file",
                             lambda self: True, raising=False)
+        if os.name == "nt":
+            fake_bin = pathlib.PureWindowsPath(r"E:\dir\na me\App.bin")
+            expected = "program {E:/dir/na me/App.bin} 0x08000000 verify"
+        else:
+            # POSIX: Path() never sees backslashes; assert the braced,
+            # space-safe form of a real POSIX path instead
+            fake_bin = pathlib.Path("/tmp/dir/na me/App.bin")
+            expected = "program {/tmp/dir/na me/App.bin} 0x08000000 verify"
         b.flash(fake_bin, "c", "0x08000000")
-        cmd = seen["cmds"][0]
-        assert cmd == "program {E:/dir/na me/App.bin} 0x08000000 verify"
+        assert seen["cmds"][0] == expected
 
     def test_brace_in_artifact_path_refused(self, tmp_path):
         evil = tmp_path / "we}ird.bin"
