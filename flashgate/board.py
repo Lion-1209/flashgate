@@ -28,6 +28,9 @@ class Board:
     artifact: Path
     flash_connect: str
     flash_address: str
+    flash_adapter: str
+    openocd_target: str
+    openocd_interface: str
     serial_port: str
     usb_vid: int
     usb_pids: tuple[int, ...]
@@ -81,6 +84,35 @@ def load_board(yaml_path: Path) -> Board:
 
     fw = raw.get("firmware") or {}
     flash = raw.get("flash") or {}
+    import re as _re
+    flash_adapter = str(flash.get("adapter", "cubeprogrammer")).lower()
+    if flash_adapter not in ("cubeprogrammer", "openocd", "fake"):
+        raise BoardError(
+            f"board profile {yaml_path.name}: flash.adapter must be one of "
+            f"cubeprogrammer|openocd|fake, got {flash_adapter!r}")
+    # Tcl-injection surface (adversarial review F1/F2): flash.address is a
+    # VALUE inside an OpenOCD command line where ';' separates commands
+    # and '}' escapes braces; target/interface strings reach -f scripts.
+    # These are enumerations/paths, not free text — whitelist them.
+    address = str(flash.get("address", "0x08000000"))
+    if not _re.fullmatch(r"0x[0-9a-fA-F]{1,10}", address):
+        raise BoardError(
+            f"board profile {yaml_path.name}: flash.address must be "
+            f"0x-prefixed hex (got {address!r})")
+    _SAFE_CFG = _re.compile(r"[A-Za-z0-9_./+-]+")
+    for key in ("openocd_target", "openocd_interface"):
+        value = str(flash.get(key, ""))
+        if value and not _SAFE_CFG.fullmatch(value):
+            raise BoardError(
+                f"board profile {yaml_path.name}: flash.{key} may only "
+                f"contain [A-Za-z0-9_./+-] (got {value!r})")
+    if (flash_adapter == "fake"
+            and os.environ.get("FLASHGATE_ALLOW_FAKE") != "1"):
+        raise BoardError(
+            f"board profile {yaml_path.name}: flash.adapter 'fake' is a "
+            "test adapter — set FLASHGATE_ALLOW_FAKE=1 to use it "
+            "(a fake flash never writes hardware and can green-light a "
+            "board that was never programmed)")
     ser = raw.get("serial") or {}
     ev = raw.get("evidence") or {}
     evidence_mode = str(ev.get("mode", "auto")).lower()
@@ -116,6 +148,9 @@ def load_board(yaml_path: Path) -> Board:
             build_command=fw["build"],
             artifact=(base / fw["dir"] / fw["artifact"]).resolve(),
             flash_connect=flash.get("connect", "port=SWD"),
+            flash_adapter=flash_adapter,
+            openocd_target=str(flash.get("openocd_target", "")),
+            openocd_interface=str(flash.get("openocd_interface", "")),
             flash_address=str(flash.get("address", "0x08000000")),
             serial_port=str(ser.get("port", "") or ""),
             usb_vid=int(str(ser.get("vid", "0x1A86")), 0),

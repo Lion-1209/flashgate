@@ -670,6 +670,20 @@ gate:
 
 写好之后先 flashgate --board boards/my-board.yaml doctor，再 verify。
 
+### 6.4bis 选择烧录后端（flash.adapter）
+
+`flash:` 段里的 `adapter:` 字段选择调试探针后端：
+
+- `cubeprogrammer`（默认）：原来的实现，走 STM32CubeProgrammer
+- `openocd`：同一根 ST-Link，不需要 ST 工具链；也是 Linux/ARM64
+  台架主机（比如树莓派）的标准路线。openocd 从 PATH 或环境变量
+  `OPENOCD_BIN` 发现；目标脚本按 MCU 家族自动映射（STM32H7* →
+  stm32h7x），特殊型号用 `flash.openocd_target` 覆盖
+- `fake`：脚本化假后端，测试用
+
+上层（验证流水线、记录、MCP、bench-serve）完全不知道后端是谁——
+换后端就是档案里改一行。
+
 ### 6.5 对接清单
 
 最小对接（启动门）：

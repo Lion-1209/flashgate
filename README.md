@@ -223,10 +223,24 @@ Stop-hook escalation — plus the full session of a real Claude Code agent
 getting blocked, diagnosing the firmware↔profile contract, fixing both
 sides, and passing on hardware ([24 MB GIF, release asset](https://github.com/Lion-1209/flashgate/releases/download/v0.3.0/5-agent-blocked.gif)).
 
+## Debug backends (Phase 2)
+
+The verify pipeline is backend-agnostic: `flash.adapter:` in the board
+profile picks the probe tool — `cubeprogrammer` (default, the original
+implementation), `openocd` (same ST-Link, no ST toolchain needed, and
+the standard route to Linux/ARM64 bench hosts like a Raspberry Pi), or
+`fake` (scripted, for tests). Validated on the same Apollo board:
+swapping to `openocd` is a one-line profile change — verify stays green
+with identical records, zero upper-layer edits, and runs slightly
+faster. OpenOCD is discovered via PATH or `$OPENOCD_BIN`; the target
+script maps from the MCU family (`STM32H7*` -> `stm32h7x`, override
+with `flash.openocd_target`).
+
 ## Board profiles
 
-One yaml per board (`boards/`): build command, artifact, flash address,
-serial adapter hints, banner template, probes, watch globs. The console-side
+One yaml per board (`boards/`): build command, artifact, flash address
+(`flash.adapter:` picks the debug backend), serial adapter hints,
+banner template, probes, watch globs. The console-side
 USB adapter is a property of your bench, not the board — port resolution
 goes explicit `serial.port` / `FLASHGATE_SERIAL_PORT`, then VID/PID hint,
 then the sole serial port, with the banner match as the final identity
@@ -237,10 +251,10 @@ full profile field reference.
 ## Status
 
 Boot gate, probe gate, Stop hook, MCP server, SWD signature channel,
-verification records (per-check evidence with artifact hashes), and the
-remote bench over device-connect — all implemented and validated on real
-hardware, the remote bench cross-host (Wi-Fi laptop driving a wired
-bench, 2026-09-15). Windows-first; Linux/macOS untested.
+verification records (per-check evidence with artifact hashes), the
+remote bench over device-connect (validated cross-host), and a second
+debug backend (OpenOCD, validated on the same board) — all on real
+hardware. Windows-first; Linux/macOS untested.
 
 ## License
 

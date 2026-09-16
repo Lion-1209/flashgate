@@ -81,7 +81,8 @@ def parse_signature(buf: bytes) -> dict | None:
 
 
 def wait_for_signature(
-    connect: str, address: int, size: int = 64, timeout_s: float = 15.0
+    connect: str, address: int, size: int = 64, timeout_s: float = 15.0,
+    read_fn=None,
 ) -> tuple[dict | None, str]:
     """Poll the signature until valid or timeout. Returns (info, last_error).
 
@@ -92,7 +93,7 @@ def wait_for_signature(
     last = "no valid signature yet"
     while time.monotonic() < deadline:
         try:
-            buf = read_ram(connect, address, size)
+            buf = (read_fn or read_ram)(connect, address, size)
         except SwdError as exc:
             last = str(exc)
             time.sleep(1.0)

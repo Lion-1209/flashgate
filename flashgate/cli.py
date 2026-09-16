@@ -26,8 +26,8 @@ import yaml
 
 from . import __version__
 from .board import Board, BoardError, default_board_path, load_board
-from . import flasher, gatestate, probes as probe_mod, records, serialmon, swdsig
-from .sttools import augmented_env, find_cubeprogrammer
+from . import backends, flasher, gatestate, probes as probe_mod, records, serialmon, swdsig
+from .sttools import augmented_env
 
 EXIT_OK = 0
 EXIT_BUILD = 1
@@ -94,6 +94,16 @@ def _resolve_board(args: argparse.Namespace) -> Board:
     return load_board(Path(path))
 
 
+def _board_backend(board: Board) -> backends.DebugBackend:
+    """The debug backend a board profile selects (Phase 2)."""
+    if board.flash_adapter == "openocd":
+        return backends.OpenOcdBackend(
+            mcu=board.mcu,
+            target=board.openocd_target or None,
+            interface=board.openocd_interface or None)
+    return backends.get_backend(board.flash_adapter)
+
+
 def _run(cmd: str, cwd: Path) -> tuple[int, str]:
     proc = subprocess.run(
         cmd, shell=True, cwd=cwd, capture_output=True, text=True,
@@ -109,21 +119,21 @@ def cmd_doctor(board: Board) -> int:
     print(f"  artifact   : {board.artifact}")
     problems: list[str] = []
 
-    cli = find_cubeprogrammer()
-    if cli:
-        print(_green(f"  programmer : {cli}"))
+    backend = _board_backend(board)
+    exe = backend.available()
+    if exe:
+        print(_green(f"  backend    : {backend.name} ({exe})"))
     else:
-        problems.append("STM32CubeProgrammer CLI not found")
-        print(_red("  programmer : NOT FOUND"))
+        problems.append(f"backend {backend.name!r} executable not found")
+        print(_red(f"  backend    : {backend.name} — EXECUTABLE NOT FOUND"))
 
-    if cli:
-        listing = flasher.list_stlink()
-        sn_lines = [ln.strip() for ln in listing.splitlines() if "ST-LINK SN" in ln]
-        if sn_lines:
-            print(_green(f"  ST-Link    : {sn_lines[0]}"))
+    if exe:
+        listing = backend.discover()
+        if backend.probe_detected(listing):
+            print(_green("  probe      : detected"))
         else:
-            problems.append("no ST-Link probe detected (check USB, power, driver)")
-            print(_red("  ST-Link    : none detected"))
+            problems.append("no debug probe detected (check USB, power, driver)")
+            print(_red("  probe      : none detected"))
 
     port, why = serialmon.resolve_console_port(board.serial_port, board.usb_vid, board.usb_pids)
     if port:
@@ -147,7 +157,8 @@ def cmd_doctor(board: Board) -> int:
     # Live SWD signature: what the board is running RIGHT NOW, no serial needed
     try:
         info, _ = swdsig.wait_for_signature(
-            board.flash_connect, board.sig_address, board.sig_size, timeout_s=2.0)
+            board.flash_connect, board.sig_address, board.sig_size, timeout_s=2.0,
+            read_fn=backend.read_mem)
         if info:
             print(_green(f"  on-board   : git={info['git']} build={info['build']} (SWD signature)"))
         else:
@@ -219,8 +230,10 @@ def cmd_build(board: Board) -> int:
 
 
 def cmd_flash(board: Board) -> int:
-    print(_cyan(f"[flash] {board.artifact.name} @ {board.flash_address} via {board.flash_connect}"))
-    result = flasher.flash(board.artifact, board.flash_connect, board.flash_address)
+    backend = _board_backend(board)
+    print(_cyan(f"[flash] {board.artifact.name} @ {board.flash_address} via "
+                f"{backend.name}:{board.flash_connect}"))
+    result = backend.flash(board.artifact, board.flash_connect, board.flash_address)
     if not result.ok:
         print(_red("[flash] FAILED"))
         print(result.detail[-1200:])
@@ -390,7 +403,8 @@ def _verify_swd(board: Board, probe_names: list[str] | None,
 
     # Flash WITHOUT starting, wipe the stale signature, then start: RAM is
     # not cleared by reset, so a surviving old-boot signature would lie.
-    result = flasher.flash(board.artifact, board.flash_connect, board.flash_address,
+    backend = _board_backend(board)
+    result = backend.flash(board.artifact, board.flash_connect, board.flash_address,
                            start=False)
     if not result.ok:
         print(_red("[flash] FAILED"))
@@ -398,11 +412,11 @@ def _verify_swd(board: Board, probe_names: list[str] | None,
         j.check("flash", "failed", result.detail[-300:].strip())
         return EXIT_FLASH
     wipe_note = ""
-    if not flasher.write32(board.flash_connect, 0, board.sig_address):
+    if not backend.write32(board.flash_connect, 0, board.sig_address):
         wipe_note = "; WARNING: stale signature could not be wiped"
         print(_yellow("[verify] warning: could not wipe the old signature "
                       "(stale-identity false-pass window)"))
-    if not flasher.start_app(board.flash_connect):
+    if not backend.start_app(board.flash_connect):
         print(_red("[flash] FAILED to start the application"))
         j.check("flash", "failed", "start_app failed")
         return EXIT_FLASH
@@ -412,7 +426,7 @@ def _verify_swd(board: Board, probe_names: list[str] | None,
     print(_cyan(f"[verify] polling signature @ {board.sig_address:#010x} via {board.flash_connect}"))
     info, err = swdsig.wait_for_signature(
         board.flash_connect, board.sig_address, board.sig_size,
-        timeout_s=board.banner_timeout_s)
+        timeout_s=board.banner_timeout_s, read_fn=backend.read_mem)
     if info is None:
         if "not supported" in err:
             print(_red(f"[verify] SIGNATURE LAYOUT MISMATCH: {err}"))
