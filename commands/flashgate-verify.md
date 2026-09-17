@@ -18,9 +18,9 @@ Interpret for the user:
 - exit 4: error string on serial
 - exit 5: identity mismatch — the board runs a different tree than
   the working copy (rebuild), or the banner's board name doesn't
-  match the profile; on the SWD path it also covers a failed
-  pre-start signature wipe (check the debug probe/ST-Link — a stale
-  identity must never count as a pass)
+  match the profile; on the SWD path it also covers a failed or
+  readback-unconfirmed pre-start signature wipe (check the debug
+  probe/ST-Link — a stale identity must never count as a pass)
 - exit 6: environment (ST-Link / serial / toolchain) — suggest
   `flashgate doctor`. Since 0.4.2 this also covers probes explicitly
   requested but the console UART being unavailable: a check that

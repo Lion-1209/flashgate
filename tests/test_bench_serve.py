@@ -255,3 +255,61 @@ class TestEventAndStopGuards:
             assert stop_bench(tmp_path) is False
         finally:
             impostor.close()
+
+
+class TestDrainBudget:
+    """The --stop drain must outlast a verify QUEUED on the bench lock:
+    a flat 120 s abandoned exactly that op (adversarial M2) — no terminal
+    snapshot for a client told a verify was running."""
+
+    def test_budget_covers_lock_wait_plus_verify(self, monkeypatch):
+        from flashgate import bench_serve, verifylock
+        monkeypatch.delenv("FLASHGATE_VERIFY_LOCK_WAIT", raising=False)
+        assert bench_serve._drain_timeout_s() == \
+            verifylock.DEFAULT_WAIT_S + bench_serve._VERIFY_BUDGET_S
+        monkeypatch.setenv("FLASHGATE_VERIFY_LOCK_WAIT", "400")
+        assert bench_serve._drain_timeout_s() == 880.0
+
+    def test_drain_passes_scaled_budget_to_wait(self, monkeypatch, capsys):
+        from flashgate import bench_serve
+        seen = {}
+
+        class FakeBench:
+            def describe(self):
+                return {"current_operation": "op-1"}
+
+            def wait(self, op_id, timeout_s):
+                seen["op"], seen["t"] = op_id, timeout_s
+                return {"state": "succeeded", "exit_code": 0}
+        monkeypatch.setenv("FLASHGATE_VERIFY_LOCK_WAIT", "400")
+        bench_serve._drain_current(FakeBench())
+        assert seen == {"op": "op-1", "t": 880.0}
+        assert "drained: succeeded" in capsys.readouterr().out
+
+    def test_drain_noop_without_current(self):
+        from flashgate import bench_serve
+
+        class FakeBench:
+            def describe(self):
+                return {}
+
+            def wait(self, *a, **k):
+                raise AssertionError("no wait without an in-flight op")
+        bench_serve._drain_current(FakeBench())
+
+    def test_drain_budget_exhaustion_says_so_honestly(self, monkeypatch, capsys):
+        # a still-running op after the budget is NOT "drained" — the print
+        # must not pretend it was (adversarial M2 residual)
+        from flashgate import bench_serve
+
+        class SlowBench:
+            def describe(self):
+                return {"current_operation": "op-slow"}
+
+            def wait(self, op_id, timeout_s):
+                return {"state": "running"}
+        bench_serve._drain_current(SlowBench())
+        out = capsys.readouterr().out
+        assert "drain budget exhausted" in out
+        assert "WITHOUT a terminal snapshot" in out
+        assert "drained:" not in out

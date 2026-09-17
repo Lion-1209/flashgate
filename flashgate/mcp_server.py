@@ -261,8 +261,9 @@ def verify(board: str | None = None) -> results.Result:
     The failure code names the broken stage — BUILD_FAILED (compile),
     FLASH_FAILED (write/start), BOOT_EVIDENCE_TIMEOUT (board silent),
     BOOT_ERROR (fault string on serial), IDENTITY_MISMATCH (board runs a
-    different tree, or the pre-start signature wipe failed — check the
-    debug probe, not the build), CAPABILITY_UNAVAILABLE (a required check could not
+    different tree, or the pre-start signature wipe failed or was not
+    confirmed by readback — check the debug probe, not the build),
+    CAPABILITY_UNAVAILABLE (a required check could not
     run — most often probes needing the console UART, which is missing or
     held by another program), PROBE_FAILED (a functional assertion did
     not hold). Full transcript in data.log; data.record carries the

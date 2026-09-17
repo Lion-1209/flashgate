@@ -3,7 +3,8 @@
 Exit-code contract (the M3 Stop hook enforces these):
   0 verified | 1 build failed | 2 flash failed | 3 no banner (timeout)
   4 boot error string | 5 identity mismatch (git sha / board name, or
-  the pre-start signature wipe failed — identity untrustworthy)
+  the pre-start signature wipe failed or was not confirmed by readback
+  — identity untrustworthy)
   6 environment error (incl. probes required but console unavailable)
   7 functional probe failed
 """
@@ -337,7 +338,7 @@ def _exit_summary(rc: int) -> str:
         3: "board stayed silent (no boot evidence)",
         4: "boot error string on console",
         5: "on-board identity != repo state, or identity untrustworthy "
-           "(signature wipe failed)",
+           "(signature wipe failed or unconfirmed by readback)",
         6: "environment error — a required check could not run",
         7: "functional probe failed",
     }.get(rc, f"exit {rc}")

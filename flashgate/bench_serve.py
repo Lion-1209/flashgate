@@ -218,6 +218,50 @@ def _build_driver(bench: BenchDriver):
     return FlashGateBenchDriver
 
 
+def _drain_timeout_s() -> float:
+    """An in-flight verify may QUEUE on the bench lock (default 300 s,
+    FLASHGATE_VERIFY_LOCK_WAIT) before it even starts building, and a
+    hook-shaped verify takes up to ~480 s. A flat 120 s drain abandoned
+    exactly the queued op — no terminal snapshot for a client told a
+    verify was running (adversarial M2): the budget must cover both.
+    Residual, stated honestly: the bench-RPC path has no external cap on
+    a verify, and a worst-case LEGAL body (cold build 300 s + flash +
+    probes) can brush past 480 s — the drain then gives up and says so
+    (see _drain_current) instead of pretending it drained."""
+    from . import cli
+    return cli._verify_lock_wait() + _VERIFY_BUDGET_S
+
+
+_VERIFY_BUDGET_S = 480.0        # the Stop hook's VERIFY_TIMEOUT_S shape;
+                                # NOT a cap the bench path enforces
+
+
+def _drain_current(bench) -> None:
+    """Serve()'s exit path: wait out the in-flight operation (see
+    bench.py's deployment constraint — a daemon worker killed mid-flash
+    leaves CubeProgrammer orphaned and the run without its record).
+    A second Ctrl+C during the drain is ignored on purpose: killing
+    mid-drain recreates exactly that orphan; the printed budget tells
+    the user how long the wait can legitimately take."""
+    current = bench.describe().get("current_operation")
+    if current:
+        budget = _drain_timeout_s()
+        print(f"\n[bench-serve] draining {current} before stop "
+              f"(up to {budget:.0f}s; Ctrl+C is ignored until it "
+              "finishes)...")
+        done = bench.wait(current, timeout_s=budget)
+        state = done.get("state") if done else None
+        if state in ("succeeded", "failed", "cancelled"):
+            print(f"[bench-serve] drained: {state} "
+                  f"exit={done.get('exit_code')}")
+        else:
+            print(f"[bench-serve] drain budget exhausted after "
+                  f"{budget:.0f}s — operation still "
+                  f"{state or 'running'}; it ends here WITHOUT a "
+                  "terminal snapshot (the bench-RPC path has no "
+                  "verify cap; see _drain_timeout_s)")
+
+
 def serve(board: Board, device_id: str | None = None) -> int:
     """Run the bench server until Ctrl+C. Blocks forever."""
     try:
@@ -247,20 +291,16 @@ def serve(board: Board, device_id: str | None = None) -> int:
     except KeyboardInterrupt:
         # Drain before exit (bench.py's deployment constraint): a daemon
         # worker killed mid-flash leaves CubeProgrammer orphaned and the
-        # run without its evidence record. A SECOND interrupt during the
-        # drain would escape and kill the worker mid-flash (R6) — ignore
-        # Ctrl+C/stop re-sends until the drain completes.
+        # run without its evidence record. SIGINT is ignored while the
+        # drain runs: a second Ctrl+C killing the worker mid-flash is the
+        # exact accident the drain exists to prevent. (The lock listener
+        # thread has already returned after the first stop signal.)
         import signal
         try:
             signal.signal(signal.SIGINT, signal.SIG_IGN)
         except (ValueError, OSError):
             pass
-        current = bench.describe().get("current_operation")
-        if current:
-            print(f"\n[bench-serve] draining {current} before stop...")
-            done = bench.wait(current, timeout_s=120)
-            print(f"[bench-serve] drained: {done['state']} "
-                  f"exit={done.get('exit_code')}")
+        _drain_current(bench)
         print("[bench-serve] stopped")
     except Exception as exc:              # e.g. invalid device_id (F5)
         print(f"[bench-serve] failed: {type(exc).__name__}: {exc}")
