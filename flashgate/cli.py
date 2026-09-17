@@ -2,7 +2,8 @@
 
 Exit-code contract (the M3 Stop hook enforces these):
   0 verified | 1 build failed | 2 flash failed | 3 no banner (timeout)
-  4 boot error string | 5 identity mismatch (git sha or board name)
+  4 boot error string | 5 identity mismatch (git sha / board name, or
+  the pre-start signature wipe failed — identity untrustworthy)
   6 environment error (incl. probes required but console unavailable)
   7 functional probe failed
 """
@@ -334,7 +335,8 @@ def _exit_summary(rc: int) -> str:
         1: "build failed", 2: "flash failed",
         3: "board stayed silent (no boot evidence)",
         4: "boot error string on console",
-        5: "on-board identity != repo state",
+        5: "on-board identity != repo state, or identity untrustworthy "
+           "(signature wipe failed)",
         6: "environment error — a required check could not run",
         7: "functional probe failed",
     }.get(rc, f"exit {rc}")
@@ -411,17 +413,23 @@ def _verify_swd(board: Board, probe_names: list[str] | None,
         print(result.detail[-1200:])
         j.check("flash", "failed", result.detail[-300:].strip())
         return EXIT_FLASH
-    wipe_note = ""
     if not backend.write32(board.flash_connect, 0, board.sig_address):
-        wipe_note = "; WARNING: stale signature could not be wiped"
-        print(_yellow("[verify] warning: could not wipe the old signature "
-                      "(stale-identity false-pass window)"))
+        # Fail closed: an unwiped stale signature could pass identity for
+        # a build that never booted. Withholding the start keeps the board
+        # from running firmware whose identity we could no longer vouch
+        # for, and exit 5 closes the identity gate (a warning here used
+        # to leave a false-pass window open).
+        print(_red("[verify] SIGNATURE WIPE FAILED — a stale old-boot signature "
+                   "could lie about identity; failing closed (start withheld)"))
+        j.check("flash", "failed",
+                "signature wipe failed — start withheld "
+                "(stale-identity false-pass window)")
+        return EXIT_SHA_MISMATCH
     if not backend.start_app(board.flash_connect):
         print(_red("[flash] FAILED to start the application"))
         j.check("flash", "failed", "start_app failed")
         return EXIT_FLASH
-    j.check("flash", "passed", "written+verified, signature wiped, started"
-            + wipe_note)
+    j.check("flash", "passed", "written+verified, signature wiped, started")
 
     print(_cyan(f"[verify] polling signature @ {board.sig_address:#010x} via {board.flash_connect}"))
     info, err = swdsig.wait_for_signature(

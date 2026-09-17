@@ -997,7 +997,9 @@ signature.address 是否一致。
 verify 返回 5。板上固件的身份跟仓库现状不一致。常见于 commit 之后
 没有重新构建，flashgate 的 verify 会先构建所以一般不会发生；发生在
 手动 flash 之后，重新跑一次 verify 就好。0.4.2 起还会报 board 名对
-不上：banner 里的 board= 和档案不一致时同样返回 5。
+不上：banner 里的 board= 和档案不一致时同样返回 5。swd 通道还有一种
+因由：烧录后、启动前的旧签名擦除失败（fail-closed，此时查调试探针
+/ST-Link，重新构建没有用）——签名的新鲜性无法保证时宁可失败。
 
 verify 返回 6 且提到 probes。0.4.2 起显式要求的探针（--probe /
 --all-probes，Stop hook 一直属于这种情况）在串口不可用时不再被静默

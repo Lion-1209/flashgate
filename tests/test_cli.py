@@ -84,6 +84,51 @@ class TestSwdProbeGuard:
         assert cli._verify_swd(board, None) == cli.EXIT_OK
 
 
+class TestWipeFailure:
+    """Fail-closed guard: a failed pre-start signature wipe must close the
+    identity gate (exit 5) and withhold the start — a stale old-boot
+    signature used to pass with only a warning (false-pass window)."""
+
+    def test_wipe_failure_fails_closed_and_withholds_start(
+            self, tmp_path, happy_swd, monkeypatch):
+        board = make_board(tmp_path)
+        monkeypatch.setattr(cli.flasher, "write32", lambda *a, **k: False)
+        started = []
+
+        def fake_start(*a, **k):
+            started.append(True)
+            return True
+        monkeypatch.setattr(cli.flasher, "start_app", fake_start)
+        assert cli._verify_swd(board, None) == cli.EXIT_SHA_MISMATCH
+        assert started == []            # the app must never start unverified
+
+    def test_wipe_failure_aborts_before_signature_poll(
+            self, tmp_path, happy_swd, monkeypatch):
+        board = make_board(tmp_path)
+        monkeypatch.setattr(cli.flasher, "write32", lambda *a, **k: False)
+        polled = []
+        monkeypatch.setattr(
+            cli.swdsig, "wait_for_signature",
+            lambda *a, **k: polled.append(True) or ({"git": "x"}, ""))
+        assert cli._verify_swd(board, None) == cli.EXIT_SHA_MISMATCH
+        assert polled == []             # a stale signature must not be read
+
+    def test_wipe_failure_recorded_in_evidence(self, tmp_path, happy_swd,
+                                               monkeypatch):
+        board = make_board(tmp_path)
+        monkeypatch.setattr(cli.flasher, "write32", lambda *a, **k: False)
+        monkeypatch.setattr(cli, "_console_port", lambda b: (None, "no serial"))
+        assert cli.cmd_verify(board, None, "swd") == cli.EXIT_SHA_MISMATCH
+        from flashgate import records
+        rec = records.latest_record(board.firmware_dir)
+        assert rec["run"]["exit_code"] == 5
+        by_name = {c["name"]: c for c in rec["checks"]}
+        assert by_name["flash"]["status"] == "failed"
+        assert "wipe" in by_name["flash"]["detail"]
+        for later in ("boot", "identity"):
+            assert by_name[later]["status"] == "skipped"
+
+
 class TestSignatureErrors:
     def test_layout_mismatch_fails_fast_as_env_error(self, tmp_path, happy_swd, monkeypatch):
         board = make_board(tmp_path)

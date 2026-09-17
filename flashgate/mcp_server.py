@@ -249,8 +249,10 @@ def verify(board: str | None = None) -> results.Result:
 
     What it does: rebuild the tree, flash over ST-Link, start the app,
     then require boot evidence proving WHICH build is running (UART
-    banner; or, without a serial cable, an SWD RAM signature — wiped
-    first, best-effort, so a stale one cannot lie), then run every
+    banner; or, without a serial cable, an SWD RAM signature — the stale
+    one is wiped before start, and a wipe failure fails closed with
+    IDENTITY_MISMATCH: a signature we cannot prove fresh must never
+    count), then run every
     defined probe, asserting on the board's answers — including live
     register readbacks where the board provides them. DESTRUCTIVE:
     rewrites the board's flash.
@@ -258,7 +260,8 @@ def verify(board: str | None = None) -> results.Result:
     The failure code names the broken stage — BUILD_FAILED (compile),
     FLASH_FAILED (write/start), BOOT_EVIDENCE_TIMEOUT (board silent),
     BOOT_ERROR (fault string on serial), IDENTITY_MISMATCH (board runs a
-    different tree), CAPABILITY_UNAVAILABLE (a required check could not
+    different tree, or the pre-start signature wipe failed — check the
+    debug probe, not the build), CAPABILITY_UNAVAILABLE (a required check could not
     run — most often probes needing the console UART, which is missing or
     held by another program), PROBE_FAILED (a functional assertion did
     not hold). Full transcript in data.log; data.record carries the
