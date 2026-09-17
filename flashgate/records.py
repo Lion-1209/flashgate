@@ -45,7 +45,8 @@ _EVIDENCE_MAX_CHARS = 4000        # a banner is one line; transcripts get tails
 
 # Envelope status per CLI exit code. Kept in sync with results._EXIT_STATUS
 # (this module must stay stdlib-only: the CLI depends on it, and pydantic
-# is an MCP-extra dependency). test_mcp pins the two tables together.
+# is an MCP-extra dependency). tests/test_records.py pins the two tables
+# together; tests/test_docs.py pins the key domain to exactly 0-7.
 _EXIT_STATUS_WORD: dict[int, str] = {
     0: "succeeded", 1: "failed", 2: "failed", 3: "timed_out",
     4: "failed", 5: "failed", 6: "incomplete", 7: "failed",

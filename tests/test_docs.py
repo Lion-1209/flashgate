@@ -6,6 +6,8 @@ exist — a recipe whose commands don't run is worse than no recipe.
 """
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -99,3 +101,111 @@ def test_referenced_local_docs_exist():
             continue
         target = DOC.parent / ref
         assert target.is_file(), f"doc references missing file: {ref}"
+
+
+def _cli_surface() -> tuple[set, set]:
+    """(subcommands, flags) parsed from the REAL `flashgate --help` output.
+    The docs whitelist must stay a subset of this — a whitelist referencing
+    a renamed/removed flag guards against a dead surface (M4)."""
+    repo = Path(__file__).resolve().parent.parent
+
+    def help_of(*args):
+        out = subprocess.run([sys.executable, "-m", "flashgate", *args, "--help"],
+                             capture_output=True, text=True, timeout=120,
+                             cwd=str(repo))
+        assert out.returncode == 0, out.stderr
+        return out.stdout
+
+    top = help_of()
+    m = re.search(r"\{([^}]+)\}", top)
+    subs = set(m.group(1).split(",")) if m else set()
+    flags = {f for f in re.findall(r"\[(--[\w-]+)[\] =]", top)}
+    for s in sorted(subs):
+        if s.startswith("-"):
+            continue
+        flags |= {f for f in re.findall(r"\[(--[\w-]+)[\] =]", help_of(s))}
+    return subs, flags
+
+
+class TestContractSurfaces:
+    """The exit-code contract lives in many copies (README table, cli
+    module docstring, slash-command, board profile comment, results.py
+    mappings, cli constants). A new/renumbered code must move ALL of them
+    together — this is the guard that makes silent desync fail loudly."""
+
+    CODES = set(range(8))
+
+    @staticmethod
+    def _readme_exit_codes() -> set:
+        text = (DOC.parent.parent / "README.md").read_text(encoding="utf-8")
+        section = text.split("## Exit codes", 1)[1]
+        rows = section.split("##", 1)[0]
+        return {int(c) for c in re.findall(r"^\|\s*(\d)\s*\|", rows, re.M)}
+
+    def test_readme_exit_table_is_exactly_0_to_7(self):
+        assert self._readme_exit_codes() == self.CODES
+
+    def test_results_mappings_cover_exactly_0_to_7(self):
+        from flashgate import results
+        assert set(results._EXIT_CODE) == self.CODES
+        assert set(results._EXIT_STATUS) == self.CODES
+
+    def test_cli_exit_constants_are_0_to_7(self):
+        from flashgate import cli
+        values = [cli.EXIT_OK, cli.EXIT_BUILD, cli.EXIT_FLASH,
+                  cli.EXIT_BANNER_TIMEOUT, cli.EXIT_BOOT_ERROR,
+                  cli.EXIT_SHA_MISMATCH, cli.EXIT_ENV, cli.EXIT_PROBE_FAIL]
+        assert values == list(range(8))
+        named = [n for n in dir(cli) if n.startswith("EXIT_")]
+        assert len(named) == len(self.CODES), (
+            f"EXIT_* constants {sorted(named)} drifted from the contract "
+            "— add the new one to this test on purpose, never silently")
+
+    def test_cli_module_docstring_lists_every_code(self):
+        # line-start or "| "-anchored only: prose like "within 3 seconds"
+        # must not count as documenting code 3 (adversarial L-1)
+        from flashgate import cli
+        found = {int(c) for c in re.findall(r"(?:^\s*|\| )([0-7]) [a-z]",
+                                            cli.__doc__ or "", re.M)}
+        assert self.CODES <= found, f"docstring missing codes: {self.CODES - found}"
+
+    def test_slash_command_lists_every_code(self):
+        text = (DOC.parent.parent / "commands" / "flashgate-verify.md")\
+            .read_text(encoding="utf-8")
+        found = set()
+        for group in re.findall(r"exit ([\d/ ]+):", text):
+            found |= {int(c) for c in re.findall(r"\d", group)}
+        assert self.CODES <= found, f"slash-command missing: {self.CODES - found}"
+
+    def test_guide_exit_table_lists_every_code(self):
+        # the GUIDE §5 table is the second FULL contract copy (Chinese) —
+        # an unguarded desync here misleads readers exactly like README's
+        text = (DOC.parent / "GUIDE.md").read_text(encoding="utf-8")
+        section = text.split("## 5. 退出码", 1)[1].split("##", 1)[0]
+        rows = {int(c) for c in re.findall(r"^\|\s*(\d)\s*\|", section, re.M)}
+        assert rows == self.CODES, f"GUIDE exit table codes drifted: {rows}"
+
+    def test_ci_recipes_inline_copy_covers_1_to_7(self):
+        # ci-recipes.md carries a compact copy ("1 构建 / 2 烧录 / …") —
+        # guard its presence and coverage (adversarial M-1, 8th copy)
+        text = DOC.read_text(encoding="utf-8")
+        m = re.search(r"（1 构建.*?探针失败）", text, re.S)
+        assert m, "ci-recipes inline exit-code copy is gone or reworded"
+        found = {int(c) for c in re.findall(r"(\d) [^/）]+", m.group(0))}
+        assert {1, 2, 3, 4, 5, 6, 7} <= found, found
+
+    def test_board_profile_comment_lists_every_code(self):
+        text = (DOC.parent.parent / "boards" / "apollo-h743.yaml")\
+            .read_text(encoding="utf-8")
+        found = {int(c) for c in re.findall(r"(?<![\w])([0-7])\s*=", text)}
+        assert self.CODES <= found, f"board profile comment missing: {self.CODES - found}"
+
+
+class TestWhitelistSyncedWithRealCli:
+    def test_whitelists_reference_only_real_surface(self):
+        subs, flags = _cli_surface()
+        assert subs, "failed to parse subcommands from --help"
+        stale_subs = _KNOWN_SUBCOMMANDS - subs
+        assert not stale_subs, f"whitelist has removed subcommands: {stale_subs}"
+        stale_flags = _KNOWN_FLAGS - flags
+        assert not stale_flags, f"whitelist has removed flags: {stale_flags}"
