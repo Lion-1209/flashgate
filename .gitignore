@@ -13,3 +13,6 @@ device-connect-vs-*.md
 
 # private strategy/business docs — never leave this machine
 /private/
+
+# cross-session audit state (stage-gate workflow) — local coordination only
+/audit/
