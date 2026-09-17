@@ -16,3 +16,6 @@ device-connect-vs-*.md
 
 # cross-session audit state (stage-gate workflow) — local coordination only
 /audit/
+
+# ZCode workspace discipline file — local tool config, never ships
+/AGENTS.md
