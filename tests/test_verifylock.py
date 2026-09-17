@@ -142,6 +142,8 @@ class TestCmdVerifyLockIntegration:
         monkeypatch.setattr(cli.flasher, "flash",
                             lambda *a, **k: type("R", (), {"ok": True, "detail": ""})())
         monkeypatch.setattr(cli.flasher, "write32", lambda *a, **k: True)
+        monkeypatch.setattr(cli.swdsig, "read_ram",
+                            lambda *a, **k: b"\x00" * 4)
         monkeypatch.setattr(cli.flasher, "start_app", lambda *a, **k: True)
         monkeypatch.setattr(
             cli.swdsig, "wait_for_signature",

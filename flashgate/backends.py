@@ -262,13 +262,21 @@ class OpenOcdBackend(DebugBackend):
 class FakeBackend(DebugBackend):
     """CI adapter: no probe, no hardware — scripts decide what happens
     (design doc §14: build fail / flash timeout / stale identity / probe
-    assertion fail, all in-process)."""
+    assertion fail, all in-process). The wipe is modeled with three
+    states: wipe_ok=False fails the write outright; wipe_lies=True
+    reports success while memory is untouched (the silent-lie class the
+    readback guard exists to catch); the default zeroes the region for
+    readbacks until start_app boots the (signing) firmware anew."""
 
     name = "fake"
 
-    def __init__(self, *, flash_ok: bool = True, signature: bytes | None = None):
+    def __init__(self, *, flash_ok: bool = True, signature: bytes | None = None,
+                 wipe_ok: bool = True, wipe_lies: bool = False):
         self.flash_ok = flash_ok
         self.signature = signature
+        self.wipe_ok = wipe_ok
+        self.wipe_lies = wipe_lies
+        self._wiped_at: int | None = None
         self.calls: list[str] = []
 
     def available(self) -> str | None:
@@ -283,14 +291,22 @@ class FakeBackend(DebugBackend):
 
     def write32(self, connect, value, address):
         self.calls.append(f"write32:{address:#x}={value:#x}")
+        if value == 0:
+            if not self.wipe_ok:
+                return False
+            if not self.wipe_lies:
+                self._wiped_at = address
         return True
 
     def start_app(self, connect):
         self.calls.append("start_app")
+        self._wiped_at = None          # new boot: firmware republishes
         return True
 
     def read_mem(self, connect, address, size):
         self.calls.append(f"read:{address:#x}+{size}")
+        if self._wiped_at == address:
+            return b"\x00" * size      # zeroed region while wiped
         return self.signature[:size] if self.signature else None
 
 

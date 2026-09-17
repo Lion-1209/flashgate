@@ -34,15 +34,20 @@ class SignatureLayoutError(SwdError):
 
 
 def read_ram(connect: str, address: int, size: int) -> bytes | None:
-    """One CubeProgrammer memory read (HotPlug: does not halt the core)."""
+    """One CubeProgrammer memory read (HotPlug: does not reset the core —
+    the default Normal connection soft-resets the target on every attach,
+    rebooting the firmware and re-publishing its signature, which would
+    hide exactly the stale-memory state this gate exists to catch)."""
     cli = find_cubeprogrammer()
     if cli is None:
         raise SwdError("STM32CubeProgrammer CLI not found")
     import subprocess
 
+    from .flasher import hotplug_connect
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "sig.bin"
-        cmd = [str(cli), "--connect", connect, "--read", hex(address), str(size), str(out)]
+        cmd = [str(cli), "--connect", hotplug_connect(connect),
+               "--read", hex(address), str(size), str(out)]
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=READ_TIMEOUT_S,

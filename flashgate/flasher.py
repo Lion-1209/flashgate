@@ -87,29 +87,37 @@ def flash(bin_path: Path, connect: str, address: str, start: bool = True) -> Fla
     return FlashResult(False, last_detail)
 
 
+def hotplug_connect(connect: str) -> str:
+    """Attach without resetting the target. CubeProgrammer's default
+    (Normal) connection soft-resets the MCU on EVERY attach: the booting
+    firmware re-publishes the RAM signature, so a wipe written under a
+    Normal connection is silently overwritten before anyone reads it —
+    found by the wipe readback on real hardware (2026-09-17). An explicit
+    mode in the connect string is respected as-is."""
+    return connect if "mode=" in connect else f"{connect} mode=Hotplug"
+
+
 def write32(connect: str, value: int, address: int) -> bool:
-    """Single 32-bit memory write via a tiny temp file (CubeProgrammer's
-    --write only accepts files). Used to wipe a stale boot signature."""
+    """Single 32-bit memory write via the -w32 primitive, attaching with
+    Hotplug. The old file-based `--write` is a flash-programming
+    operation: on a RAM address it silently no-ops while still printing
+    "File download complete" (real-hardware evidence 2026-09-17)."""
     cli = find_cubeprogrammer()
     if cli is None:
         return False
     import subprocess
-    import tempfile
 
-    with tempfile.TemporaryDirectory() as tmp:
-        blob = Path(tmp) / "word.bin"
-        blob.write_bytes(value.to_bytes(4, "little"))
-        cmd = [str(cli), "--connect", connect,
-               "--write", str(blob), f"{address:#010x}"]
-        try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30,
-                env=augmented_env(), encoding="utf-8", errors="replace",
-            )
-        except (subprocess.TimeoutExpired, OSError):
-            return False
-        output = (proc.stdout or "") + (proc.stderr or "")
-        return proc.returncode == 0 and "File download complete" in output
+    cmd = [str(cli), "--connect", hotplug_connect(connect),
+           "-w32", f"{address:#010x}", f"{value:#010x}"]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30,
+            env=augmented_env(), encoding="utf-8", errors="replace",
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    output = (proc.stdout or "") + (proc.stderr or "")
+    return proc.returncode == 0 and "32-bit data download complete" in output
 
 
 def start_app(connect: str) -> bool:

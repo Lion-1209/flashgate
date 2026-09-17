@@ -250,7 +250,8 @@ def verify(board: str | None = None) -> results.Result:
     What it does: rebuild the tree, flash over ST-Link, start the app,
     then require boot evidence proving WHICH build is running (UART
     banner; or, without a serial cable, an SWD RAM signature — the stale
-    one is wiped before start, and a wipe failure fails closed with
+    one is wiped and read-back verified before start, and a failed or
+    unconfirmed wipe fails closed with
     IDENTITY_MISMATCH: a signature we cannot prove fresh must never
     count), then run every
     defined probe, asserting on the board's answers — including live

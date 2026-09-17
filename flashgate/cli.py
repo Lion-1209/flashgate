@@ -511,11 +511,38 @@ def _verify_swd(board: Board, probe_names: list[str] | None,
                 "signature wipe failed — start withheld "
                 "(stale-identity false-pass window)")
         return EXIT_SHA_MISMATCH
+    # Read the wiped word back: a backend can report success while the
+    # write never landed (silent lie), which would leave the stale-identity
+    # window open. An unverifiable wipe fails closed exactly like a failed
+    # one — "probably wiped" is not evidence. A short/empty read is NOT
+    # confirmation either: a tool can exit 0 with a truncated dump.
+    try:
+        wiped = backend.read_mem(board.flash_connect, board.sig_address, 4)
+    except swdsig.SwdError:
+        wiped = None
+    if wiped is None:
+        reason = "the post-wipe readback could not be read"
+    elif len(wiped) != 4:
+        reason = (f"the post-wipe readback returned {len(wiped)} byte(s) "
+                  f"instead of 4")
+    elif any(wiped):
+        reason = ("the post-wipe readback is not zero (write reported "
+                  "success but the memory disagrees)")
+    else:
+        reason = ""
+    if reason:
+        print(_red(f"[verify] SIGNATURE WIPE NOT CONFIRMED — {reason}; "
+                   "failing closed (start withheld)"))
+        j.check("flash", "failed",
+                f"signature wipe not confirmed by readback ({reason}) — "
+                "start withheld")
+        return EXIT_SHA_MISMATCH
     if not backend.start_app(board.flash_connect):
         print(_red("[flash] FAILED to start the application"))
         j.check("flash", "failed", "start_app failed")
         return EXIT_FLASH
-    j.check("flash", "passed", "written+verified, signature wiped, started")
+    j.check("flash", "passed", "written+verified, signature wiped (readback "
+            "confirmed), started")
 
     print(_cyan(f"[verify] polling signature @ {board.sig_address:#010x} via {board.flash_connect}"))
     info, err = swdsig.wait_for_signature(

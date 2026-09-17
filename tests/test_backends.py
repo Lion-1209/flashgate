@@ -161,6 +161,73 @@ class TestFakeBackendPipeline:
         rc = self._run(tmp_path, fake, monkeypatch)
         assert rc == cli.EXIT_OK
 
+    def test_wipe_lie_caught_by_readback_exit_5(self, tmp_path, monkeypatch):
+        # L1: the backend reports a successful wipe but the memory still
+        # holds the old magic — the readback must catch the silent lie.
+        from flashgate import backends, cli
+        fake = backends.FakeBackend(signature=self._sig(b"aaaaaaa-dirty"),
+                                    wipe_lies=True)
+        rc = self._run(tmp_path, fake, monkeypatch)
+        assert rc == cli.EXIT_SHA_MISMATCH
+        from flashgate import records
+        rec = records.latest_record(self._board(tmp_path).firmware_dir)
+        by_name = {c["name"]: c for c in rec["checks"]}
+        assert by_name["flash"]["status"] == "failed"
+        assert "readback" in by_name["flash"]["detail"]
+        assert any(c.startswith("read:") for c in fake.calls)
+
+    def test_wipe_readback_unreadable_fails_closed(self, tmp_path, monkeypatch):
+        # readback returning None (unreadable region) is NOT evidence of
+        # a wipe — fail closed, never pass unverified.
+        from flashgate import backends, cli
+        fake = backends.FakeBackend(signature=None, wipe_lies=True)
+        rc = self._run(tmp_path, fake, monkeypatch)
+        assert rc == cli.EXIT_SHA_MISMATCH
+
+    def test_wipe_readback_empty_or_short_fails_closed(self, tmp_path,
+                                                       monkeypatch):
+        # a tool exiting 0 with a truncated/empty dump is the same silent
+        # lie as a nonzero read — not confirmation (adversarial M1).
+        from flashgate import backends, cli
+
+        class TruncRead(backends.FakeBackend):
+            def read_mem(self, connect, address, size):
+                if size == 4:
+                    return self.trunc
+                return super().read_mem(connect, address, size)
+
+        for trunc in (b"", b"\x00\x00"):
+            fake = TruncRead(signature=self._sig(b"aaaaaaa-dirty"))
+            fake.trunc = trunc
+            rc = self._run(tmp_path, fake, monkeypatch)
+            assert rc == cli.EXIT_SHA_MISMATCH, trunc
+
+    def test_explicit_wipe_failure_exit_5(self, tmp_path, monkeypatch):
+        # L4: the fake can now express an outright wipe failure.
+        from flashgate import backends, cli
+        fake = backends.FakeBackend(signature=self._sig(b"aaaaaaa-dirty"),
+                                    wipe_ok=False)
+        rc = self._run(tmp_path, fake, monkeypatch)
+        assert rc == cli.EXIT_SHA_MISMATCH
+        assert not any(c.startswith("read:") for c in fake.calls)
+
+    def test_happy_path_performs_and_passes_readback(self, tmp_path, monkeypatch):
+        from flashgate import backends, cli
+        from flashgate.board import Board
+        fake = backends.FakeBackend(
+            signature=self._sig(b"aaaaaaa-dirty"))
+        monkeypatch.setattr(Board, "head_sha", lambda self: "aaaaaaa-dirty")
+        rc = self._run(tmp_path, fake, monkeypatch)
+        assert rc == cli.EXIT_OK
+        reads = [c for c in fake.calls if c.startswith("read:")]
+        assert any(c.endswith("+4") for c in reads), "4-byte readback happened"
+        from flashgate import records
+        rec = records.latest_record(self._board(tmp_path).firmware_dir)
+        by_name = {c["name"]: c for c in rec["checks"]}
+        assert by_name["flash"]["status"] == "passed"
+        assert "readback confirmed" in by_name["flash"]["detail"]
+        assert fake._wiped_at is None          # cleared by start_app
+
     def test_fake_adapter_selectable_from_profile(self, tmp_path, monkeypatch):
         monkeypatch.setenv("FLASHGATE_ALLOW_FAKE", "1")
         board = self._board(tmp_path)
