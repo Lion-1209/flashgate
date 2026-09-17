@@ -19,3 +19,6 @@ device-connect-vs-*.md
 
 # ZCode workspace discipline file — local tool config, never ships
 /AGENTS.md
+
+# ZCode workspace-scoped agent definitions — local tool config, never ships
+/.zcode/
