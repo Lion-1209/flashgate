@@ -97,6 +97,9 @@ fresh clone verifies out of the box once wired up.
 
 Board profiles, probes, fixes and docs are welcome — see
 [CONTRIBUTING.md](CONTRIBUTING.md) for the setup and contribution terms.
+For a release gate that does not depend on the Stop hook (the board signs
+off in CI before a tag publishes), see the official GitHub Actions
+recipes in [docs/ci-recipes.md](docs/ci-recipes.md).
 
 ## The Stop hook
 

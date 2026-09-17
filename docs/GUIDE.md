@@ -940,6 +940,9 @@ Stop 事件下面应该挂着 flashgate 那条命令。装在用户级可以完�
 
 其他实现了 Claude Code 兼容 hooks 契约的 harness 也能挂同一个脚本。
 
+hook 拦的是写代码的 agent；要在发版前拦人（提交/标签触发真机验证，
+板子不点头流水线就红），用 CI 验收配方：[ci-recipes.md](ci-recipes.md)。
+
 ## 9. MCP server
 
 让支持 MCP 的 agent 直接操作板子。装可选依赖后配置 `.mcp.json`：
