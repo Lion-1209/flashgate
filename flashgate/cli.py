@@ -14,6 +14,7 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -27,7 +28,7 @@ import yaml
 
 from . import __version__
 from .board import Board, BoardError, default_board_path, load_board
-from . import backends, flasher, gatestate, probes as probe_mod, records, serialmon, swdsig
+from . import backends, flasher, gatestate, probes as probe_mod, records, serialmon, swdsig, verifylock
 from .sttools import augmented_env
 
 EXIT_OK = 0
@@ -342,14 +343,99 @@ def _exit_summary(rc: int) -> str:
     }.get(rc, f"exit {rc}")
 
 
+def _verify_lock_wait() -> float:
+    """Bench-lock wait budget; $FLASHGATE_VERIFY_LOCK_WAIT overrides (seconds).
+
+    Only finite non-negative floats are honored: nan would time out every
+    verify instantly, inf would wait forever — both silently break the
+    bounded-wait contract, so they fall back to the default with a warning."""
+    raw = os.environ.get("FLASHGATE_VERIFY_LOCK_WAIT")
+    if raw is None:
+        return verifylock.DEFAULT_WAIT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        value = -1.0
+    if not math.isfinite(value) or value < 0:
+        print(_yellow(f"[verify] ignoring invalid FLASHGATE_VERIFY_LOCK_WAIT={raw!r} "
+                      "(expected non-negative seconds as a float)"))
+        return verifylock.DEFAULT_WAIT_S
+    return value
+
+
 def cmd_verify(board: Board, probe_names: list[str] | None,
                evidence: str | None = None) -> int:
+    """One hardware verify at a time per bench (Stop-hook stacking fix):
+    a second verify — another hook level, a manual run racing the hook —
+    waits for the lock instead of fighting for the console port, then
+    times out to a truthful exit 6 rather than a misleading serial error."""
+    wait_s = _verify_lock_wait()
+    t0 = time.monotonic()
+    lock = verifylock.BenchLock(board.firmware_dir)
+    try:
+        lock.acquire(wait_s)
+    except verifylock.VerifyLockTimeout:
+        waited = time.monotonic() - t0
+        print(_red(f"[verify] bench busy: another verify is still holding the "
+                   f"bench lock (waited {waited:.0f}s of the {wait_s:.1f}s "
+                   "budget) — retry when it finishes, or raise "
+                   "FLASHGATE_VERIFY_LOCK_WAIT"))
+        # Forensics only: identify the tree the verdict WOULD have applied
+        # to. Any failure here must not change the outcome.
+        fingerprint = ""
+        try:
+            fingerprint = gatestate.tree_fingerprint(board.firmware_dir,
+                                                     board.yaml_path)
+        except Exception:
+            pass
+        j = records.VerifyJournal([], mode="bench-busy",
+                                  probe_names=probe_names,
+                                  fingerprint=fingerprint)
+        if fingerprint:
+            j.note("firmware", {"dir": str(board.firmware_dir),
+                                "git_sha": board.head_sha(),
+                                "tree_fingerprint": fingerprint})
+        j.check("verify", "skipped",
+                f"bench lock held by another verify; waited {waited:.1f}s")
+        try:
+            record = j.to_record(board, EXIT_ENV, records.status_word(EXIT_ENV),
+                                 summary="bench busy: another verify holds the lock")
+            records.write_record(record, board.firmware_dir, fingerprint)
+            print(_cyan(f"[record] {record['record_id']}.json  "
+                        f"({records.summarize_record(record)})"))
+        except (OSError, ValueError) as exc:
+            print(_yellow(f"[record] could not persist verify record: {exc}"))
+        return EXIT_ENV
+    except OSError as exc:
+        # Lock SETUP failed only (unwritable state dir): fail as an env
+        # error — record writing needs the same dir, so no record either.
+        # Errors raised by the verify body below are NOT caught here.
+        print(_red(f"[verify] cannot set up the bench lock: {exc}"))
+        return EXIT_ENV
+    try:
+        return _cmd_verify(board, probe_names, evidence)
+    finally:
+        lock.release()
+
+
+def _cmd_verify(board: Board, probe_names: list[str] | None,
+                evidence: str | None = None) -> int:
     mode = (evidence or board.evidence_mode or "auto").lower()
     if mode not in ("auto", "uart", "swd"):
         print(_red(f"[verify] invalid evidence mode {mode!r} (expected auto|uart|swd)"))
         return EXIT_ENV
     if mode == "auto":
-        mode = "uart" if _console_port(board)[0] else "swd"
+        # A console-port SCAN failure (pyserial enumerating COM ports can
+        # raise) must not escape as a bare traceback — auto falls back to
+        # the swd evidence path, which enforces its own console rules when
+        # probes are explicitly requested.
+        try:
+            has_console = _console_port(board)[0] is not None
+        except OSError as exc:
+            print(_yellow(f"[verify] console port scan failed ({exc}); "
+                          "evidence mode falls back to swd"))
+            has_console = False
+        mode = "uart" if has_console else "swd"
 
     plan = (["console", "build", "flash", "boot", "identity"] if mode == "uart"
             else ["build", "flash", "boot", "identity"])

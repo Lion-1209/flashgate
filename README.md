@@ -120,6 +120,17 @@ The same broken tree is blocked at most twice, then released with a loud
 warning — the session can never wedge, and a failure is never silently
 swallowed.
 
+One verify at a time per bench: concurrent verifies (a user-level and a
+session-level Stop hook firing on the same stop, or a manual run racing
+the hook) serialize on an OS-owned lock file under the firmware's
+`.flashgate/` instead of fighting over the console serial port — the
+second one waits (default 300 s, `FLASHGATE_VERIFY_LOCK_WAIT`), and a
+timed-out wait is a truthful exit 6 ("bench busy"), never a misleading
+serial error. Register the hook at ONE level only: in the common case
+stacking now just costs a redundant second verify; on a very slow bench
+it can still exhaust the hook's own subprocess timeout, so it is a
+crutch, not a supported setup.
+
 ## Verification records
 
 Every `verify` — passing or failing — leaves an evidence record at
