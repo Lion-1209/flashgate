@@ -34,7 +34,7 @@ statement. A green record must never read as "all functionality passed":
 |---|---|
 | `statement` | fixed one-liner: the listed checks held on THIS board and bench for THIS tree — nothing beyond the list |
 | `verified` | names of the checks that HELD (status `passed`) |
-| `not_verified` | the standing blind spots: physical effects (register/console readbacks are the firmware's own software observations), everything outside the listed probes, environmental conditions; and "functional behavior entirely — no probes ran" whenever no probe passed |
+| `not_verified` | the standing blind spots: physical effects (register/console readbacks are the firmware's own software observations), everything outside the listed probes, environmental conditions; and "functional behavior entirely — no probes were run" whenever no probe was run; when probes RAN but none passed, "probes ran but none passed (see failed_checks)" |
 | `profile_notes` | verbatim `coverage.notes` from the board profile — bench-specific caveats |
 | `failed_checks` / `skipped_checks` | present only when applicable |
 
