@@ -210,6 +210,14 @@ class TestContractSurfaces:
             assert key in text, f"record-schema.md lost the coverage key {key!r}"
         assert '"1.1"' in text
 
+    def test_readme_and_guide_describe_coverage_block(self):
+        # audit L-2: the README/GUIDE coverage paragraphs had no drift
+        # guard — if they stop describing the block, this pin goes red
+        readme = (DOC.parent.parent / "README.md").read_text(encoding="utf-8")
+        assert "coverage" in readme and "what this PASS proves" in readme
+        guide = (DOC.parent / "GUIDE.md").read_text(encoding="utf-8")
+        assert "coverage" in guide and "没验证什么" in guide
+
     def test_record_schema_mentions_the_contract_range(self):
         # the 9th copy: record-schema.md describes exit_code as "the CLI
         # 0-7 contract" — a range-only copy, but if the contract ever

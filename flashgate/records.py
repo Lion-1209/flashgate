@@ -239,17 +239,25 @@ def build_coverage(board, record: dict) -> dict:
     passed = [c.get("name") for c in checks if c.get("status") == "passed"]
     failed = [c.get("name") for c in checks if c.get("status") == "failed"]
     skipped = [c.get("name") for c in checks if c.get("status") == "skipped"]
-    probe_names_all = [c.get("name") for c in checks
-                       if (c.get("name") or "").startswith("probe:")]
-    probes_passed = [n for n in probe_names_all if n in passed]
+    probe_entries = [(c.get("name"), c.get("status")) for c in checks
+                     if (c.get("name") or "").startswith("probe:")]
+    probes_executed = [n for n, s in probe_entries
+                       if s in ("passed", "failed")]
+    probes_passed = [n for n, s in probe_entries if s == "passed"]
     not_verified = list(_NOT_VERIFIED_BASE)
-    if not probe_names_all:
+    if not probe_entries:
         not_verified.insert(
             0, "functional behavior entirely — no probes were run; this "
             "record proves boot identity only")
+    elif not probes_executed:
+        # planned but NEVER executed (an earlier step failed first) —
+        # "ran but none passed" would overstate what happened, the exact
+        # honesty class this block exists to prevent (audit M-1)
+        not_verified.insert(
+            0, "functional behavior — probes were planned but never "
+            "executed (see skipped_checks); an earlier step failed "
+            "before they could run")
     elif not probes_passed:
-        # probes RAN but none passed — "no probes ran" would be a lie
-        # contradicted by failed_checks in the same block (adversarial M2)
         not_verified.insert(
             0, "functional behavior — probes ran but none passed (see "
             "failed_checks); this record proves nothing functional")

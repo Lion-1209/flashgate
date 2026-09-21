@@ -350,6 +350,21 @@ class TestCoverageBlock:
         cov = records.build_coverage(self._board_notes([]), rec)
         assert any("no probes were run" in x for x in cov["not_verified"])
 
+    def test_skipped_probes_are_not_claimed_ran(self):
+        # audit M-1: probes planned but never executed (build failed
+        # first — the Stop hook's most common failure path) must be
+        # described as never-executed, not "ran but none passed"
+        from flashgate import records
+        rec = {"checks": [
+            {"name": "console", "status": "passed"},
+            {"name": "build", "status": "failed"},
+            {"name": "probe:led-demo", "status": "skipped"},
+        ]}
+        cov = records.build_coverage(self._board_notes([]), rec)
+        assert any("never executed" in x for x in cov["not_verified"])
+        assert not any("none passed" in x for x in cov["not_verified"])
+        assert cov["skipped_checks"] == ["probe:led-demo"]
+
     def test_failed_probe_is_not_claimed_unrun(self):
         # adversarial M2: probes that RAN and failed must not be described
         # as "no probes ran" — failed_checks already names them
