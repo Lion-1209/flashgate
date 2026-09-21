@@ -313,3 +313,89 @@ class TestVerifyRecordIsolation:
         monkeypatch.setattr(srv.cli_mod, "cmd_verify", fake_verify)
         res = asyncio.run(srv.mcp.call_tool("verify", {"board": str(yaml)}))
         assert res.structured_content["data"]["record"]["run"]["exit_code"] == 0
+
+
+class TestToolDefinitionQuality:
+    """Directory-facing guards (Glama TDQS dimensions): every parameter of
+    every tool carries a real description, the schema's parameter set stays
+    in sync with the function signature (a new param without a doc goes
+    red), no description re-inflates past the conciseness budget, the
+    read-only / destructive hints are backed by the words in the text, the
+    verify description keeps every failure code an agent must route on, and
+    the mcp 1.x compatibility shim keeps the wraps-chain annotations
+    resolved."""
+
+    MAX_DESC = 1600          # verify sits at ~1.5k; the headroom is deliberate
+    MIN_PARAM_DOC = 20       # a stub like "the board" is not a description
+    VERIFY_CODES = ("BUILD_FAILED", "FLASH_FAILED", "BOOT_EVIDENCE_TIMEOUT",
+                    "BOOT_ERROR", "IDENTITY_MISMATCH", "CAPABILITY_UNAVAILABLE",
+                    "PROBE_FAILED")
+
+    @staticmethod
+    def _tools():
+        async def go():
+            return {t.name: t for t in await srv.mcp.list_tools()}
+        return asyncio.run(go())
+
+    @staticmethod
+    def _schema(t):
+        # mcp 2.x exposes input_schema, 1.x inputSchema — the guards must
+        # run on both, since the shim they partly protect is a 1.x fix.
+        return getattr(t, "input_schema", None) or t.inputSchema
+
+    def test_every_parameter_is_described(self):
+        for name, t in self._tools().items():
+            props = self._schema(t).get("properties", {})
+            assert props, name
+            for param, spec in props.items():
+                doc = (spec.get("description") or "").strip()
+                assert len(doc) >= self.MIN_PARAM_DOC, \
+                    f"{name}.{param} lacks a real description: {doc!r}"
+
+    def test_schema_params_match_signature(self):
+        import inspect
+        for name, t in self._tools().items():
+            fn = getattr(srv, name)
+            want = set(inspect.signature(fn).parameters)
+            have = set(self._schema(t).get("properties", {}))
+            assert want == have, f"{name}: schema {have} != signature {want}"
+
+    def test_no_description_reinflates(self):
+        for name, t in self._tools().items():
+            assert len(t.description or "") <= self.MAX_DESC, \
+                f"{name} description is {len(t.description)} chars — keep it terse"
+
+    def test_destructive_hint_is_stated(self):
+        for name, t in self._tools().items():
+            ann = t.annotations
+            if ann is not None and getattr(ann, "destructive_hint", False):
+                assert "DESTRUCTIVE" in (t.description or ""), \
+                    f"{name} mutates the device but never says so"
+
+    def test_readonly_hint_is_stated(self):
+        for name, t in self._tools().items():
+            ann = t.annotations
+            if ann is not None and getattr(ann, "read_only_hint", False):
+                low = (t.description or "").lower()
+                assert ("read-only" in low or "read only" in low
+                        or "no hardware" in low), \
+                    f"{name} claims read-only but the description never says so"
+
+    def test_verify_keeps_every_failure_code(self):
+        desc = self._tools()["verify"].description or ""
+        missing = [c for c in self.VERIFY_CODES if c not in desc]
+        assert not missing, f"verify description lost routing codes: {missing}"
+
+    def test_wraps_chain_annotations_resolved(self):
+        # mcp 1.x runs issubclass() on the raw annotation; a string left
+        # anywhere on the wraps chain (from __future__ import annotations)
+        # crashes its import. The _register shim must have resolved them.
+        import inspect
+        for name in self._tools():
+            fn, seen = getattr(srv, name), set()
+            while fn is not None and id(fn) not in seen:
+                seen.add(id(fn))
+                for ann in inspect.signature(fn).parameters.values():
+                    assert not isinstance(ann.annotation, str), \
+                        f"{name}: unresolved string annotation on the wraps chain"
+                fn = getattr(fn, "__wrapped__", None)

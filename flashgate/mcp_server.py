@@ -32,8 +32,10 @@ import io
 import re
 import sys
 import time
+import typing
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Annotated
 
 try:
     from mcp.server.mcpserver import MCPServer as _Server   # mcp 2.x
@@ -50,6 +52,14 @@ try:
     from mcp.types import ToolAnnotations
 except ImportError:                                         # pre-1.9 SDK
     ToolAnnotations = None                                  # type: ignore[assignment]
+
+try:
+    from pydantic import Field
+except ImportError as exc:  # pragma: no cover - friendly extra hint
+    raise SystemExit(
+        "flashgate MCP server needs the optional dependency: "
+        'pip install "flashgate[mcp]"'
+    ) from exc
 
 from . import __version__, flasher, probes as probe_mod, records, serialmon
 from . import results
@@ -111,6 +121,25 @@ def _register(annotations=None, structured: bool = False):
             kwargs["annotations"] = annotations
         if structured and "structured_output" in params:
             kwargs["structured_output"] = True
+        # `from __future__ import annotations` leaves every annotation a
+        # string; mcp 1.x's Tool.from_function runs issubclass() on the raw
+        # annotation (to spot a Context param) and crashes at import on a
+        # string. Resolve the hints to real objects first — include_extras
+        # keeps the Annotated[Field] parameter descriptions alive. The
+        # resolved dict must land on the wraps chain, not just the outer
+        # wrapper: inspect.signature() follows __wrapped__ back to the
+        # original function and would still read the strings there. 2.x
+        # evaluates annotations itself and is unaffected either way.
+        try:
+            hints = typing.get_type_hints(fn, include_extras=True)
+        except Exception:                        # noqa: BLE001 - registration must not die here
+            hints = None
+        if hints is not None:
+            target, seen = fn, set()
+            while target is not None and id(target) not in seen:
+                seen.add(id(target))
+                target.__annotations__ = hints
+                target = getattr(target, "__wrapped__", None)
         return mcp.tool(**kwargs)(fn)
     return deco
 
@@ -138,7 +167,13 @@ def _safe(policy: dict):
 
 @_register(annotations=_ann(readOnlyHint=True), structured=True)
 @_safe(P_READ)
-def board_info(board: str | None = None) -> results.Result:
+def board_info(
+    board: Annotated[str | None, Field(
+        description="Path to the board profile YAML (e.g. "
+                    "boards/apollo-h743.yaml). Omit to use the server's "
+                    "--board argument, else the default search path.")]
+        = None,
+) -> results.Result:
     """Discover what hardware you are working with: the active board
     profile.
 
@@ -181,7 +216,13 @@ def board_info(board: str | None = None) -> results.Result:
 
 @_register(annotations=_ann(readOnlyHint=True), structured=True)
 @_safe(P_READ)
-def doctor(board: str | None = None) -> results.Result:
+def doctor(
+    board: Annotated[str | None, Field(
+        description="Path to the board profile YAML (e.g. "
+                    "boards/apollo-h743.yaml). Omit to use the server's "
+                    "--board argument, else the default search path.")]
+        = None,
+) -> results.Result:
     """Diagnose the bench: is the ST-Link probe visible, is the console
     serial port resolvable, is the cross toolchain installed?
 
@@ -200,7 +241,13 @@ def doctor(board: str | None = None) -> results.Result:
 
 @_register(annotations=_ann(idempotentHint=True), structured=True)
 @_safe(P_BUILD)
-def build(board: str | None = None) -> results.Result:
+def build(
+    board: Annotated[str | None, Field(
+        description="Path to the board profile YAML (e.g. "
+                    "boards/apollo-h743.yaml). Omit to use the server's "
+                    "--board argument, else the default search path.")]
+        = None,
+) -> results.Result:
     """Compile the board's firmware (incremental — recompiles only what
     changed). No hardware is touched.
 
@@ -219,7 +266,13 @@ def build(board: str | None = None) -> results.Result:
 
 @_register(annotations=_ann(destructiveHint=True), structured=True)
 @_safe(P_FLASH)
-def flash(board: str | None = None) -> results.Result:
+def flash(
+    board: Annotated[str | None, Field(
+        description="Path to the board profile YAML (e.g. "
+                    "boards/apollo-h743.yaml). Omit to use the server's "
+                    "--board argument, else the default search path.")]
+        = None,
+) -> results.Result:
     """Write the built firmware to the board's flash over ST-Link,
     verify the write, then start the application. DESTRUCTIVE: whatever
     runs on the MCU is replaced.
@@ -240,38 +293,42 @@ def flash(board: str | None = None) -> results.Result:
 
 @_register(annotations=_ann(destructiveHint=True), structured=True)
 @_safe(P_VERIFY)
-def verify(board: str | None = None) -> results.Result:
+def verify(
+    board: Annotated[str | None, Field(
+        description="Path to the board profile YAML (e.g. "
+                    "boards/apollo-h743.yaml). Omit to use the server's "
+                    "--board argument, else the default search path.")]
+        = None,
+) -> results.Result:
     """The hardware gate — the authoritative answer to "does this
-    firmware actually work on the board?". status=succeeded means the
-    BOARD ITSELF booted the exact tree you are on (its reported git sha
-    matches the working tree) and every functional probe passed. Trust no
-    other signal; a clean build is not a pass.
+    firmware actually work on the board?".
+
+    status=succeeded means the BOARD ITSELF booted the exact tree you are
+    on (its reported git sha matches the working tree) and every
+    functional probe passed. Trust no other signal; a clean build is not
+    a pass.
 
     What it does: rebuild the tree, flash over ST-Link, start the app,
     then require boot evidence proving WHICH build is running (UART
-    banner; or, without a serial cable, an SWD RAM signature — the stale
-    one is wiped and read-back verified before start, and a wipe whose
-    readback ANSWERED wrongly fails closed with
-    IDENTITY_MISMATCH: a signature we cannot prove fresh must never
-    count; a readback that cannot run at all is an environment failure), then run every
-    defined probe, asserting on the board's answers — including live
-    register readbacks where the board provides them. DESTRUCTIVE:
-    rewrites the board's flash.
+    banner; or, without a serial cable, an SWD RAM signature — a stale
+    signature is wiped and read-back verified before start; a wipe that
+    fails, or whose readback answers wrong or cannot run at all, fails
+    closed), then run every defined probe, asserting on the board's
+    answers, including live register readbacks. DESTRUCTIVE: rewrites the
+    board's flash.
 
-    The failure code names the broken stage — BUILD_FAILED (compile),
-    FLASH_FAILED (write/start), BOOT_EVIDENCE_TIMEOUT (board silent),
-    BOOT_ERROR (fault string on serial), IDENTITY_MISMATCH (board runs a
-    different tree, or the pre-start signature wipe failed or its
-    readback ANSWERED wrongly — check the debug probe, not the build; a
-    readback that cannot run at all is CAPABILITY_UNAVAILABLE, not
-    this),
-    CAPABILITY_UNAVAILABLE (a required check could not
-    run — most often probes needing the console UART, which is missing or
-    held by another program), PROBE_FAILED (a functional assertion did
-    not hold). Full transcript in data.log; data.record carries the
-    persisted evidence record of this run (per-check verdicts, banner /
-    signature / probe evidence, artifact sha256) and data.record_dir is
-    where the JSON audit trail accumulates."""
+    The failure code names the broken stage: BUILD_FAILED, FLASH_FAILED,
+    BOOT_EVIDENCE_TIMEOUT, BOOT_ERROR, IDENTITY_MISMATCH (the board runs
+    a different tree, or the signature wipe failed or its readback
+    answered wrongly — check the debug probe, not the build),
+    CAPABILITY_UNAVAILABLE (a required check could not run — most often
+    the console UART, or a readback that cannot run at all: environment
+    failure, check named, start withheld), PROBE_FAILED. Full transcript
+    in data.log; data.record is this run's persisted evidence record,
+    data.record_dir where the audit trail accumulates.
+
+    Report the status and code verbatim; never claim success from the
+    build step alone."""
     try:
         board_obj = _board(board)
     except BoardError as exc:
@@ -297,7 +354,17 @@ def verify(board: str | None = None) -> results.Result:
 
 @_register(annotations=_ann(readOnlyHint=False), structured=True)
 @_safe(P_PROBE)
-def probe(names: list[str] | None = None, board: str | None = None) -> results.Result:
+def probe(
+    names: Annotated[list[str] | None, Field(
+        description="Probe names to run, taken from board_info's "
+                    "\"probes\" list. Omit or pass [] to run every "
+                    "defined probe.")] = None,
+    board: Annotated[str | None, Field(
+        description="Path to the board profile YAML (e.g. "
+                    "boards/apollo-h743.yaml). Omit to use the server's "
+                    "--board argument, else the default search path.")]
+        = None,
+) -> results.Result:
     """Exercise the firmware ALREADY RUNNING on the board with its
     defined probes: each probe sends console commands and asserts on the
     board's answers — including live register readbacks (e.g. the timer
@@ -346,7 +413,24 @@ def probe(names: list[str] | None = None, board: str | None = None) -> results.R
 
 @_register(annotations=_ann(readOnlyHint=False, openWorldHint=True), structured=True)
 @_safe(P_CONSOLE_SEND)
-def console_send(line: str, wait_s: float = 1.0, board: str | None = None) -> results.Result:
+def console_send(
+    line: Annotated[str, Field(
+        description="One console command line to send, e.g. \"led0?\". "
+                    "Written verbatim — embedded newlines dispatch "
+                    "multiple commands, and over-long lines are dropped "
+                    "by the firmware console buffer. The command set is "
+                    "board-specific; board_info and the board's probe "
+                    "definitions list the known commands.")],
+    wait_s: Annotated[float, Field(
+        description="Seconds to wait for the firmware's answer after "
+                    "sending; below 0.1 it is clamped up (typical 1.0). "
+                    "Large values block for that long.")] = 1.0,
+    board: Annotated[str | None, Field(
+        description="Path to the board profile YAML (e.g. "
+                    "boards/apollo-h743.yaml). Omit to use the server's "
+                    "--board argument, else the default search path.")]
+        = None,
+) -> results.Result:
     """Talk to the firmware directly: send ONE command line on the
     console UART and collect its answer.
 
@@ -392,7 +476,17 @@ def console_send(line: str, wait_s: float = 1.0, board: str | None = None) -> re
 
 @_register(annotations=_ann(readOnlyHint=True), structured=True)
 @_safe(P_READ)
-def console_read(seconds: float = 2.0, board: str | None = None) -> results.Result:
+def console_read(
+    seconds: Annotated[float, Field(
+        description="Seconds to listen passively, sending nothing; "
+                    "below 0.1 it is clamped up (typical 2.0). Large "
+                    "values block for that long.")] = 2.0,
+    board: Annotated[str | None, Field(
+        description="Path to the board profile YAML (e.g. "
+                    "boards/apollo-h743.yaml). Omit to use the server's "
+                    "--board argument, else the default search path.")]
+        = None,
+) -> results.Result:
     """Listen passively: capture everything the firmware prints on the
     console for the given number of seconds, sending nothing.
 
