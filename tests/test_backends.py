@@ -379,3 +379,32 @@ class TestInjectionAndDelegation:
         import flashgate.backends as bm
         src = open(bm.__file__, encoding="utf-8").read()
         assert 'f"interface/{i}.cfg"' in src
+
+
+
+class TestReadbackOSErrorIsEnvFailure:
+    def test_readback_spawn_failure_exit_6_start_withheld(self, tmp_path,
+                                                          monkeypatch):
+        # the read could not RUN (tool spawn OSError) — environment
+        # failure exit 6 with the check named, never a pass, start
+        # withheld (N0-6: was an accidental crash-net 6 before)
+        from flashgate import backends, cli
+        _P = TestFakeBackendPipeline
+
+        class NoTool(backends.FakeBackend):
+            def read_mem(self, connect, address, size):
+                if size == 4:
+                    raise OSError("spawn failed")
+                return super().read_mem(connect, address, size)
+        monkeypatch.setenv("FLASHGATE_ALLOW_FAKE", "1")
+        board = _P._board(tmp_path)
+        fake = NoTool(signature=_P._sig(b"aaaaaaa-dirty"))
+        monkeypatch.setattr(cli, "_build", lambda b, j=None: cli.EXIT_OK)
+        monkeypatch.setattr(cli, "_board_backend", lambda b: fake)
+        assert cli.cmd_verify(board, None) == cli.EXIT_ENV
+        assert fake.calls.count("start_app") == 0
+        from flashgate import records
+        rec = records.latest_record(board.firmware_dir)
+        by = {c["name"]: c for c in rec["checks"]}
+        assert by["flash"]["status"] == "failed"
+        assert "could not run" in by["flash"]["detail"]

@@ -184,7 +184,7 @@ class BenchDriver:
             ts = now.strftime("%Y%m%dT%H%M%S") + f"{now.microsecond // 1000:03d}"
             op = _Operation(op_id=f"op-{ts}-{seq:05d}",
                             created_at=_iso(),
-                            _pre_last=records.LAST)
+                            _pre_last=records.current_last())
             self._ops[op.op_id] = op
             self._current = op
             while len(self._ops) > MAX_OPERATION_HISTORY:   # oldest out
@@ -269,7 +269,7 @@ class BenchDriver:
         new (LAST unchanged) carries no record — never a stale one, even
         when the previous write landed in the same clock tick (FINDING-1).
         No mtime fallback (F3): missing evidence stays honestly missing."""
-        last = records.LAST
+        last = records.current_last()
         if last is None or last is op._pre_last:
             return
         try:

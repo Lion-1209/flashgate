@@ -521,6 +521,16 @@ def _verify_swd(board: Board, probe_names: list[str] | None,
         wiped = backend.read_mem(board.flash_connect, board.sig_address, 4)
     except swdsig.SwdError:
         wiped = None
+    except OSError as exc:
+        # The read could not RUN (tool spawn failed) — an environment
+        # failure, not an identity verdict: exit 6 with the check named,
+        # never a pass (a check that cannot run never counts). The start
+        # stays withheld exactly like the exit-5 branches.
+        print(_red(f"[verify] SIGNATURE WIPE READBACK could not run: "
+                   f"{exc} — failing closed (start withheld)"))
+        j.check("flash", "failed",
+                f"readback could not run ({exc}) — start withheld")
+        return EXIT_ENV
     if wiped is None:
         reason = "the post-wipe readback could not be read"
     elif len(wiped) != 4:
@@ -819,7 +829,7 @@ def main(argv: list[str] | None = None) -> int:
                 # stdout is the machine channel: human logs go to stderr
                 with contextlib.redirect_stdout(sys.stderr):
                     rc = cmd_verify(board, names, getattr(args, "evidence", None))
-                last = records.LAST
+                last = records.current_last()
                 if last is not None and Path(last["fw_dir"]) == board.firmware_dir:
                     # ensure_ascii (default): the JSON must survive ANY
                     # consumer codepage — a cp936 pipe meeting U+FFFD from
@@ -842,9 +852,16 @@ def main(argv: list[str] | None = None) -> int:
                 except ValueError as exc:   # bad FLASHGATE_BENCH_LOCK_PORT_BASE
                     print(_red(f"[bench-serve] {exc}"))
                     return 2
-                if stopping:
+                if stopping is True:
                     print("[bench-serve] stop signalled — the server drains "
                           "its in-flight operation, then exits")
+                    return 0
+                if stopping == "draining":
+                    print("[bench-serve] the lock is held by a listener "
+                          "that is not answering — almost certainly a "
+                          "bench-serve already draining after an earlier "
+                          "--stop. Wait for it to exit; this is not an "
+                          "error.")
                     return 0
                 print("[bench-serve] no bench-serve is holding the lock for "
                       f"{board.firmware_dir} on the current lock-port base "

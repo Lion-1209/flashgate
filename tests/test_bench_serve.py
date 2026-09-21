@@ -210,19 +210,53 @@ class TestLockDiagnostics:
             lock.close()
 
     def test_squatter_named_as_unrelated_process(self, tmp_path):
+        # a REAL stranger: a local service that answers something the
+        # lock listener never would (deterministic on every platform —
+        # the bind-only shape is nondeterministic on Windows loopback:
+        # deferred-refuse vs reset-at-recv)
         import socket as pysocket
+        import threading
         import pytest
         from flashgate import bench_serve as bs
         port = bs._lock_port(tmp_path)
         stranger = pysocket.socket()
         stranger.bind(("127.0.0.1", port))
         stranger.listen(1)
+
+        def answer_garbage():
+            try:
+                conn, _ = stranger.accept()
+                conn.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+                conn.close()
+            except OSError:
+                pass
+        th = threading.Thread(target=answer_garbage, daemon=True)
+        th.start()
         try:
             with pytest.raises(RuntimeError,
                                match="UNRELATED local process"):
                 bs.acquire_bench_lock(tmp_path)
         finally:
             stranger.close()
+
+    def test_silent_holder_named_as_draining(self, tmp_path):
+        # listening but never accepting/answering: the exact shape of a
+        # bench-serve DRAINING after --stop (listener thread returned,
+        # socket still bound) — must NOT be blamed as an unrelated
+        # process (stage-7 L-1, fixed 2026-09-21)
+        import socket as pysocket
+        import pytest
+        from flashgate import bench_serve as bs
+        port = bs._lock_port(tmp_path)
+        silent = pysocket.socket()
+        silent.bind(("127.0.0.1", port))
+        silent.listen(1)          # kernel backlog accepts; nobody replies
+        try:
+            with pytest.raises(RuntimeError,
+                               match="DRAINING after --stop"):
+                bs.acquire_bench_lock(tmp_path)
+        finally:
+            silent.close()
 
     def test_port_base_default_and_override(self, tmp_path, monkeypatch):
         from flashgate import bench_serve as bs
@@ -326,16 +360,41 @@ class TestEventAndStopGuards:
             loop.close()
 
     def test_stop_bench_false_without_ok_ack(self, tmp_path):
+        # an impostor ANSWERS, but not the protocol's ok — not signalled
         import socket as pysocket
+        import threading
         from flashgate.bench_serve import _lock_port, stop_bench
-        # an impostor holds the port but does not speak the protocol
         impostor = pysocket.socket()
         impostor.bind(("127.0.0.1", _lock_port(tmp_path)))
         impostor.listen(1)
+
+        def answer_not_ok():
+            try:
+                conn, _ = impostor.accept()
+                conn.recv(64)
+                conn.sendall(b"nope\n")
+                conn.close()
+            except OSError:
+                pass
+        th = threading.Thread(target=answer_not_ok, daemon=True)
+        th.start()
         try:
             assert stop_bench(tmp_path) is False
         finally:
             impostor.close()
+
+    def test_stop_bench_draining_receipt_for_silent_holder(self, tmp_path):
+        # a holder that connects-but-never-answers = the draining shape:
+        # the receipt must say so, not claim "no bench-serve" (N0-3)
+        import socket as pysocket
+        from flashgate.bench_serve import _lock_port, stop_bench
+        silent = pysocket.socket()
+        silent.bind(("127.0.0.1", _lock_port(tmp_path)))
+        silent.listen(1)
+        try:
+            assert stop_bench(tmp_path) == "draining"
+        finally:
+            silent.close()
 
 
 class TestDrainBudget:
@@ -411,3 +470,40 @@ class TestDrainBudget:
             assert got == (0 if _os.name == "nt" else 1)
         finally:
             lock.close()
+
+
+class TestN0DebtGuards:
+    """2026-09-21 N0 debt-pack guards: socket-leak-free acquire, the
+    draining receipt for a second --stop."""
+
+    def test_bad_base_raises_before_any_socket_is_created(self, tmp_path,
+                                                          monkeypatch):
+        # the port is computed BEFORE the socket exists: a ValueError for
+        # a bad base can no longer leak an unclosed socket (N0-1)
+        import pytest
+        from flashgate import bench_serve as bs
+        made = []
+        real_socket = bs.socket.socket
+
+        class CountingSocket(real_socket):
+            def __init__(self, *a, **kw):
+                made.append(self)
+                super().__init__(*a, **kw)
+        monkeypatch.setattr(bs.socket, "socket", CountingSocket)
+        monkeypatch.setenv("FLASHGATE_BENCH_LOCK_PORT_BASE", "abc")
+        with pytest.raises(ValueError, match="must be a port number"):
+            bs.acquire_bench_lock(tmp_path)
+        assert not made, "no socket may exist when the base is invalid"
+
+    def test_second_stop_during_drain_says_so(self, tmp_path):
+        # a silent holder (bench-serve draining after an earlier --stop)
+        # must not be reported as "no bench-serve" (N0-3, stage-5 L1)
+        import socket as pysocket
+        from flashgate import bench_serve as bs
+        silent = pysocket.socket()
+        silent.bind(("127.0.0.1", bs._lock_port(tmp_path)))
+        silent.listen(1)
+        try:
+            assert bs.stop_bench(tmp_path) == "draining"
+        finally:
+            silent.close()

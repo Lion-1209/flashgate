@@ -293,3 +293,27 @@ class TestPruneGuards:
         # correct behavior under clock skew; the invariant is survival)
         import json as _json
         assert _json.loads(fresh.read_text(encoding="utf-8"))["record_id"] == fresh.stem
+
+
+class TestLastRegistryIsThreadLocal:
+    """N0-7: the write registry is thread-local storage. Every consumer
+    (bench worker thread, MCP tool thread) writes and reads on its own
+    thread, so a concurrent run's record can never land in another
+    run's read window — the record-association race the business plan
+    named is closed at the storage layer."""
+
+    def test_other_thread_cannot_inherit(self, tmp_path):
+        import threading
+        from flashgate import records
+        fw = tmp_path / "fw"
+        fw.mkdir()
+        records.write_record({"run": {"exit_code": 0, "summary": "t"}},
+                             fw)
+        mine = records.current_last()
+        assert mine is not None and mine["record"]["run"]["exit_code"] == 0
+        seen = {}
+        th = threading.Thread(
+            target=lambda: seen.update(last=records.current_last()))
+        th.start()
+        th.join()
+        assert seen["last"] is None, "a fresh thread must start empty"

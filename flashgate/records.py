@@ -39,7 +39,22 @@ MAX_RECORDS = 500
 # In-process registry of the record written by the LAST write_record call.
 # The MCP server (which runs cmd_verify in-process) uses it to attach THIS
 # run's record — never a stale one picked blindly by mtime.
-LAST: dict | None = None
+# THREAD-LOCAL since 2026-09-21: every consumer (bench worker thread, MCP
+# tool thread) writes and reads on the SAME thread, so per-thread storage
+# makes cross-run attachment structurally impossible — a concurrent
+# verify's record can never land in another run's read window (the
+# business plan's record-association race, closed at the storage layer).
+import threading as _threading
+
+_local = _threading.local()
+
+
+def current_last() -> dict | None:
+    """This thread's most recent write_record result (path/record/fw_dir).
+
+    None in a thread that never wrote one — a fresh consumer thread
+    cannot inherit another thread's record by accident."""
+    return getattr(_local, "last", None)
 
 _EVIDENCE_MAX_CHARS = 4000        # a banner is one line; transcripts get tails
 
@@ -208,7 +223,6 @@ def write_record(record: dict, fw_dir: Path, fingerprint: str = "") -> Path:
     existence-checked suffix: two runs can land in the same second with the
     same verdict and fingerprint (adversarial review F2) — silent overwrite
     would destroy audit history."""
-    global LAST
     now = datetime.now(timezone.utc)
     ts = now.strftime("%Y%m%dT%H%M%S") + f"{now.microsecond // 1000:03d}"
     exit_code = record.get("run", {}).get("exit_code", -1)
@@ -224,8 +238,8 @@ def write_record(record: dict, fw_dir: Path, fingerprint: str = "") -> Path:
     record["record_id"] = path.stem
     path.write_text(json.dumps(record, indent=2, ensure_ascii=False),
                     encoding="utf-8")
-    LAST = {"path": path, "record": record, "fw_dir": fw_dir,
-            "at": time.monotonic()}
+    _local.last = {"path": path, "record": record, "fw_dir": fw_dir,
+                   "at": time.monotonic()}
     _prune(fw_dir, exempt=path)
     return path
 

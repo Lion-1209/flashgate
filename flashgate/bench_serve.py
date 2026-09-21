@@ -56,19 +56,35 @@ def _lock_port(fw_dir: Path) -> int:
         str(fw_dir.resolve()).lower().encode("utf-8")) % 1000)
 
 
-def _held_by_bench_lock_listener(port: int) -> bool:
-    """Distinguish a real bench-serve lock from an unrelated squatter:
-    the lock listener answers any non-stop payload with
-    'unknown command'. A stranger stays silent, refuses, or says
-    something else — blame must land on the right holder."""
+def _probe_lock_holder(port: int) -> str:
+    """Classify who holds the port: 'bench' (the lock listener answers
+    non-stop payloads with 'unknown command'), 'silent' (connect succeeds
+    but nobody answers — the exact shape of a bench-serve DRAINING after
+    --stop: its listener thread has returned while the socket stays
+    bound), or 'none' (refused/other — an unrelated bound-but-not-
+    listening squatter). Blame must land on the right holder."""
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=2) as s:
+        s = socket.create_connection(("127.0.0.1", port), timeout=2)
+    except (TimeoutError, socket.timeout):
+        return "silent"   # full backlog: someone's connection is queued —
+                          # a listener exists; the drain shape again
+    except OSError:
+        return "none"
+    with s:
+        try:
             s.settimeout(2)
             s.sendall(b"flashgate-lock-probe\n")
             reply = s.recv(128)
-    except OSError:
-        return False
-    return reply.strip() == b"unknown command"
+        except (TimeoutError, socket.timeout):
+            return "silent"    # connected, then silence: recv timed out —
+                               # the draining shape
+        except OSError:
+            return "none"      # connected, then reset: bound but not
+                               # really listening (Windows loopback
+                               # deferred-refuse lands here)
+        if reply.strip() == b"unknown command":
+            return "bench"
+        return "silent" if not reply else "none"
 
 
 def acquire_bench_lock(fw_dir: Path) -> socket.socket:
@@ -81,7 +97,8 @@ def acquire_bench_lock(fw_dir: Path) -> socket.socket:
     access-denied (seen live in the first cross-host test, 2026-09-15).
     Different boards (different fw dirs) lock different ports and may
     share a host."""
-    s = socket.socket()
+    port = _lock_port(fw_dir)      # ValueError (bad base) BEFORE any
+    s = socket.socket()            # socket exists — nothing to leak
     try:
         # POSIX only: answered probe connections die into TIME_WAIT with
         # the lock port as their local port — without SO_REUSEADDR a Linux
@@ -93,13 +110,13 @@ def acquire_bench_lock(fw_dir: Path) -> socket.socket:
         # remnants by default.
         if os.name != "nt":
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("127.0.0.1", _lock_port(fw_dir)))
+        s.bind(("127.0.0.1", port))
         s.listen(1)
         return s
     except OSError:
         s.close()
-        port = _lock_port(fw_dir)
-        if _held_by_bench_lock_listener(port):
+        holder = _probe_lock_holder(port)
+        if holder == "bench":
             raise RuntimeError(
                 f"a bench-serve lock listener answers on lock port {port} "
                 f"— almost certainly another bench-serve for {fw_dir} "
@@ -107,6 +124,12 @@ def acquire_bench_lock(fw_dir: Path) -> socket.socket:
                 "--stop`, do not kill it mid-verify. Rarely, a DIFFERENT "
                 "firmware dir hashed to the same port — stopping would "
                 "stop THAT bench)")
+        if holder == "silent":
+            raise RuntimeError(
+                f"lock port {port} is held by a listener that does not "
+                "answer — almost certainly a bench-serve DRAINING after "
+                "--stop (wait for it to exit; do not kill it mid-drain). "
+                "If it never exits, only then look for a stranger")
         raise RuntimeError(
             f"lock port {port} is held by an UNRELATED local process "
             f"(not a bench-serve) — free it (netstat -ano, then find the "
@@ -160,16 +183,21 @@ def _start_lock_listener(lock: socket.socket,
     return t
 
 
-def stop_bench(fw_dir: Path) -> bool:
+def stop_bench(fw_dir: Path) -> bool | str:
     """Signal a running bench-serve for this firmware dir to stop.
     True = signalled (it drains its in-flight operation, then exits);
-    False = no bench-serve is holding the lock."""
+    False = nobody holds the lock; "draining" = connected (or queued on a
+    full backlog) but nobody answered — the draining signature after an
+    earlier --stop. A bare False for that state used to claim 'no
+    bench-serve' about a server that was still alive (stage-5 L1)."""
     try:
         with socket.create_connection(("127.0.0.1", _lock_port(fw_dir)),
                                       timeout=3) as s:
             s.sendall(b"stop\n")
             reply = s.recv(128).decode("utf-8", errors="replace")
         return reply.startswith("ok")
+    except (TimeoutError, socket.timeout):
+        return "draining"
     except OSError:
         return False
 

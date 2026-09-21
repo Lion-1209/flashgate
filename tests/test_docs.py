@@ -201,6 +201,28 @@ class TestContractSurfaces:
         assert self.CODES <= found, f"board profile comment missing: {self.CODES - found}"
 
 
+    def test_record_schema_mentions_the_contract_range(self):
+        # the 9th copy: record-schema.md describes exit_code as "the CLI
+        # 0-7 contract" — a range-only copy, but if the contract ever
+        # grows this phrase must move with it (N0-4)
+        text = (DOC.parent / "record-schema.md").read_text(encoding="utf-8")
+        m = re.search(r"exit_code.{0,80}?([0-9])-([0-9]) contract", text)
+        assert m, "record-schema.md lost its exit-code contract phrase"
+        assert (int(m.group(1)), int(m.group(2))) == (0, 7)
+
+    def test_demo_md_stays_non_contractual(self):
+        # DEMO.md is a narrative transcript archive, ADJUDICATED out of
+        # the contract-surface set (N0-5). If someone ever turns it into
+        # a full enumerated exit-code copy, it must join
+        # TestContractSurfaces instead of silently drifting.
+        text = (DOC.parent.parent / "demo" / "README.md")            .read_text(encoding="utf-8")
+        codes = {int(c) for c in re.findall(r"exit(?:\s*code)?\s*([0-7])",
+                                            text, re.I)}
+        assert codes != self.CODES, (
+            "demo/README.md now enumerates every exit code — either wire "
+            "it into TestContractSurfaces or trim it back to narrative")
+
+
 class TestWhitelistSyncedWithRealCli:
     def test_whitelists_reference_only_real_surface(self):
         subs, flags = _cli_surface()

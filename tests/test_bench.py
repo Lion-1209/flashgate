@@ -91,7 +91,8 @@ class TestOperationLifecycle:
         # run's record sitting on disk.
         board = make_board(tmp_path)
         _write_record_for(board, exit_code=0)      # stale, from "before"
-        records.LAST = None
+        # (thread-local registry: the worker thread starts with None —
+        # nothing to reset since records.py went thread-local)
         d = BenchDriver(board, verify_fn=lambda b, n: 7)
         done = d.wait(d.start_verify()["op_id"], timeout_s=5)
         assert done["state"] == "failed"
@@ -265,8 +266,9 @@ class TestRecordSourceAndIsolation:
             return 0
 
         d_a = BenchDriver(board_a, verify_fn=writes_a)
-        d_a.wait(d_a.start_verify()["op_id"], 5)
-        assert records.LAST is not None       # registry holds A's record
+        done_a = d_a.wait(d_a.start_verify()["op_id"], 5)
+        assert done_a["record"] is not None   # A's own thread attached its
+        # record (the registry is thread-local; B's thread can never see it)
 
         release.set()
         done = d_b.wait(op["op_id"], 10)
@@ -328,8 +330,11 @@ class TestHardening:
         done["record"]["run"]["exit_code"] = 99        # nested mutation
         again = d.get_operation(done["op_id"])
         assert again["record"]["run"]["exit_code"] == 0
-        import flashgate.records as rec_mod
-        assert rec_mod.LAST["record"]["run"]["exit_code"] == 0
+        # the durable on-disk copy is the registry the audit world sees —
+        # it must be unmutated too (thread-local registry is per-worker)
+        from flashgate import records as rec_mod
+        on_disk = rec_mod.latest_record(board.firmware_dir)
+        assert on_disk["run"]["exit_code"] == 0
 
     def test_describe_reports_probes_error(self, tmp_path):
         from flashgate.board import BoardError
