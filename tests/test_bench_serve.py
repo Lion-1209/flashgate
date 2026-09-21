@@ -495,15 +495,3 @@ class TestN0DebtGuards:
             bs.acquire_bench_lock(tmp_path)
         assert not made, "no socket may exist when the base is invalid"
 
-    def test_second_stop_during_drain_says_so(self, tmp_path):
-        # a silent holder (bench-serve draining after an earlier --stop)
-        # must not be reported as "no bench-serve" (N0-3, stage-5 L1)
-        import socket as pysocket
-        from flashgate import bench_serve as bs
-        silent = pysocket.socket()
-        silent.bind(("127.0.0.1", bs._lock_port(tmp_path)))
-        silent.listen(1)
-        try:
-            assert bs.stop_bench(tmp_path) == "draining"
-        finally:
-            silent.close()

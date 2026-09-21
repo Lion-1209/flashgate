@@ -129,7 +129,9 @@ def acquire_bench_lock(fw_dir: Path) -> socket.socket:
                 f"lock port {port} is held by a listener that does not "
                 "answer — almost certainly a bench-serve DRAINING after "
                 "--stop (wait for it to exit; do not kill it mid-drain). "
-                "If it never exits, only then look for a stranger")
+                "If nothing exits, it may be a silent third-party "
+                "service: find it (netstat) or set "
+                "FLASHGATE_BENCH_LOCK_PORT_BASE to move the lock range")
         raise RuntimeError(
             f"lock port {port} is held by an UNRELATED local process "
             f"(not a bench-serve) — free it (netstat -ano, then find the "

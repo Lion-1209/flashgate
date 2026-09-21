@@ -89,7 +89,7 @@ fresh clone verifies out of the box once wired up.
 | 2 | flash failed |
 | 3 | board stayed silent (no banner / no signature within timeout) |
 | 4 | error string seen on serial (HardFault, assertion) |
-| 5 | on-board identity ≠ repo state (git sha or board name) — or the identity evidence channel could not be reset: a failed or unconfirmed pre-start signature wipe (the wipe is read back and verified; a backend silently lying about it is caught) fails closed (exit 5, start withheld), because a surviving old-boot signature must never count as a pass |
+| 5 | on-board identity ≠ repo state (git sha or board name) — or the identity evidence channel could not be reset: a failed pre-start signature wipe, or a readback that ANSWERED wrongly — nonzero, or a truncated rc-0 dump (the wipe is read back and verified; a backend silently lying about it is caught) — fails closed (exit 5, start withheld); a readback that cannot RUN at all is an environment failure (exit 6). A surviving old-boot signature must never count as a pass |
 | 6 | environment error (no ST-Link / serial / tools) — including probes explicitly required via `--probe`/`--all-probes` but the console UART is unavailable: a check that cannot run never counts as a pass |
 | 7 | functional probe failed |
 

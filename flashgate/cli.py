@@ -3,8 +3,8 @@
 Exit-code contract (the M3 Stop hook enforces these):
   0 verified | 1 build failed | 2 flash failed | 3 no banner (timeout)
   4 boot error string | 5 identity mismatch (git sha / board name, or
-  the pre-start signature wipe failed or was not confirmed by readback
-  — identity untrustworthy)
+  the pre-start signature wipe failed / its readback ANSWERED wrongly
+  — identity untrustworthy; a readback that cannot run at all is 6)
   6 environment error (incl. probes required but console unavailable)
   7 functional probe failed
 """
@@ -515,25 +515,31 @@ def _verify_swd(board: Board, probe_names: list[str] | None,
     # Read the wiped word back: a backend can report success while the
     # write never landed (silent lie), which would leave the stale-identity
     # window open. An unverifiable wipe fails closed exactly like a failed
-    # one — "probably wiped" is not evidence. A short/empty read is NOT
-    # confirmation either: a tool can exit 0 with a truncated dump.
+    # one — "probably wiped" is not evidence. The semantic axis (N0
+    # follow-up, adversarial M1): a readback that ANSWERED wrongly
+    # (nonzero, or a short/empty dump with rc 0) is an identity verdict
+    # -> exit 5; a readback that could not RUN at all (OSError spawn,
+    # SwdError tool failure, None return) is an environment failure
+    # -> exit 6 — never a pass either way, start withheld both ways.
     try:
         wiped = backend.read_mem(board.flash_connect, board.sig_address, 4)
-    except swdsig.SwdError:
-        wiped = None
-    except OSError as exc:
-        # The read could not RUN (tool spawn failed) — an environment
-        # failure, not an identity verdict: exit 6 with the check named,
-        # never a pass (a check that cannot run never counts). The start
-        # stays withheld exactly like the exit-5 branches.
+    except (swdsig.SwdError, OSError) as exc:
         print(_red(f"[verify] SIGNATURE WIPE READBACK could not run: "
-                   f"{exc} — failing closed (start withheld)"))
+                   f"{type(exc).__name__}: {exc} — failing closed "
+                   "(start withheld)"))
         j.check("flash", "failed",
-                f"readback could not run ({exc}) — start withheld")
+                f"readback could not run ({type(exc).__name__}: "
+                f"{exc}) — start withheld")
         return EXIT_ENV
     if wiped is None:
-        reason = "the post-wipe readback could not be read"
-    elif len(wiped) != 4:
+        # the tool answered nothing at all — environment, not identity
+        print(_red("[verify] SIGNATURE WIPE READBACK could not run: "
+                   "backend returned no data — failing closed "
+                   "(start withheld)"))
+        j.check("flash", "failed",
+                "readback could not run (no data) — start withheld")
+        return EXIT_ENV
+    if len(wiped) != 4:
         reason = (f"the post-wipe readback returned {len(wiped)} byte(s) "
                   f"instead of 4")
     elif any(wiped):
@@ -860,8 +866,10 @@ def main(argv: list[str] | None = None) -> int:
                     print("[bench-serve] the lock is held by a listener "
                           "that is not answering — almost certainly a "
                           "bench-serve already draining after an earlier "
-                          "--stop. Wait for it to exit; this is not an "
-                          "error.")
+                          "--stop. Wait for it to exit; if nothing ever "
+                          "exits, look for a silent third-party service "
+                          "(netstat) or move the lock range via "
+                          "FLASHGATE_BENCH_LOCK_PORT_BASE.")
                     return 0
                 print("[bench-serve] no bench-serve is holding the lock for "
                       f"{board.firmware_dir} on the current lock-port base "

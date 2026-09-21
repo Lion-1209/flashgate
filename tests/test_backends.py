@@ -176,13 +176,31 @@ class TestFakeBackendPipeline:
         assert "readback" in by_name["flash"]["detail"]
         assert any(c.startswith("read:") for c in fake.calls)
 
-    def test_wipe_readback_unreadable_fails_closed(self, tmp_path, monkeypatch):
-        # readback returning None (unreadable region) is NOT evidence of
-        # a wipe — fail closed, never pass unverified.
+    def test_wipe_readback_unreadable_is_env_failure(self, tmp_path,
+                                                     monkeypatch):
+        # readback returning NO DATA at all is an environment failure
+        # (exit 6, "could not run"), not an identity verdict — the tool
+        # answered nothing (N0 follow-up, adversarial M1 semantic axis)
         from flashgate import backends, cli
         fake = backends.FakeBackend(signature=None, wipe_lies=True)
         rc = self._run(tmp_path, fake, monkeypatch)
-        assert rc == cli.EXIT_SHA_MISMATCH
+        assert rc == cli.EXIT_ENV
+
+    def test_wipe_readback_tool_error_is_env_failure(self, tmp_path,
+                                                     monkeypatch):
+        # SwdError from the read tool (CLI missing / read failed) is an
+        # environment failure too — all three SwdError raise sites are
+        # "could not run", none is an identity verdict (adversarial M1)
+        from flashgate import backends, cli, swdsig
+
+        class NoTool(backends.FakeBackend):
+            def read_mem(self, connect, address, size):
+                if size == 4:
+                    raise swdsig.SwdError("CubeProgrammer read failed")
+                return super().read_mem(connect, address, size)
+        fake = NoTool(signature=self._sig(b"aaaaaaa-dirty"))
+        rc = self._run(tmp_path, fake, monkeypatch)
+        assert rc == cli.EXIT_ENV
 
     def test_wipe_readback_empty_or_short_fails_closed(self, tmp_path,
                                                        monkeypatch):
