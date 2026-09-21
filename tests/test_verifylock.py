@@ -123,6 +123,11 @@ class TestCmdVerifyLockIntegration:
             rec = records.latest_record(board.firmware_dir)
             assert rec["run"]["exit_code"] == 6
             assert rec["run"]["mode"] == "bench-busy"
+            # adversarial M1: a 1.1-stamped busy record must carry its own
+            # honest coverage — nothing ran, not even boot identity
+            cov = rec["coverage"]
+            assert cov["verified"] == []
+            assert any("not even boot" in x for x in cov["not_verified"])
             by_name = {c["name"]: c for c in rec["checks"]}
             assert by_name["verify"]["status"] == "skipped"
             assert "bench lock" in by_name["verify"]["detail"]

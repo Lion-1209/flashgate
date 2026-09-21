@@ -239,12 +239,20 @@ def build_coverage(board, record: dict) -> dict:
     passed = [c.get("name") for c in checks if c.get("status") == "passed"]
     failed = [c.get("name") for c in checks if c.get("status") == "failed"]
     skipped = [c.get("name") for c in checks if c.get("status") == "skipped"]
-    probes_ran = any(n and n.startswith("probe:") for n in passed)
+    probe_names_all = [c.get("name") for c in checks
+                       if (c.get("name") or "").startswith("probe:")]
+    probes_passed = [n for n in probe_names_all if n in passed]
     not_verified = list(_NOT_VERIFIED_BASE)
-    if not probes_ran:
+    if not probe_names_all:
         not_verified.insert(
-            0, "functional behavior entirely — no probes ran; this record "
-            "proves boot identity only")
+            0, "functional behavior entirely — no probes were run; this "
+            "record proves boot identity only")
+    elif not probes_passed:
+        # probes RAN but none passed — "no probes ran" would be a lie
+        # contradicted by failed_checks in the same block (adversarial M2)
+        not_verified.insert(
+            0, "functional behavior — probes ran but none passed (see "
+            "failed_checks); this record proves nothing functional")
     cov: dict = {
         "statement": "the listed checks held on THIS board and bench for "
                      "THIS tree — nothing beyond the list",

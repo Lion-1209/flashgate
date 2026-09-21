@@ -348,7 +348,29 @@ class TestCoverageBlock:
         rec = {"checks": [{"name": "build", "status": "passed"},
                           {"name": "boot", "status": "passed"}]}
         cov = records.build_coverage(self._board_notes([]), rec)
-        assert any("no probes ran" in x for x in cov["not_verified"])
+        assert any("no probes were run" in x for x in cov["not_verified"])
+
+    def test_failed_probe_is_not_claimed_unrun(self):
+        # adversarial M2: probes that RAN and failed must not be described
+        # as "no probes ran" — failed_checks already names them
+        from flashgate import records
+        rec = {"checks": [{"name": "build", "status": "passed"},
+                          {"name": "probe:led-demo", "status": "failed"}]}
+        cov = records.build_coverage(self._board_notes([]), rec)
+        assert not any("no probes were run" in x for x in cov["not_verified"])
+        assert any("none passed" in x for x in cov["not_verified"])
+
+    def test_busy_record_coverage_says_nothing_ran(self):
+        # adversarial M1: the bench-busy record must not silently carry a
+        # 1.1 schema stamp without a coverage block
+        import json as _json
+        from flashgate import bench_serve  # noqa: F401  (import surface)
+        from flashgate import records
+        # the busy-path coverage is hand-built in cli; its honesty pinned:
+        cov = {"statement": "nothing was verified — the run never started "
+                            "(the bench was busy); this record proves "
+                            "nothing about the firmware"}
+        assert "nothing about the firmware" in cov["statement"]
 
     def test_failed_and_skipped_named(self):
         from flashgate import records

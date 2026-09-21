@@ -402,6 +402,15 @@ def cmd_verify(board: Board, probe_names: list[str] | None,
         try:
             record = j.to_record(board, EXIT_ENV, records.status_word(EXIT_ENV),
                                  summary="bench busy: another verify holds the lock")
+            record["coverage"] = {
+                "statement": "nothing was verified — the run never started "
+                             "(the bench was busy); this record proves "
+                             "nothing about the firmware",
+                "verified": [],
+                "not_verified": ["everything — no check ran, not even boot "
+                                 "identity"],
+                "profile_notes": list(board.coverage_notes),
+            }
             records.write_record(record, board.firmware_dir, fingerprint)
             print(_cyan(f"[record] {record['record_id']}.json  "
                         f"({records.summarize_record(record)})"))

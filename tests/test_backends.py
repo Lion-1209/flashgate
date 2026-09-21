@@ -107,6 +107,7 @@ class TestFakeBackendPipeline:
             "  build: ninja\n  artifact: fw.bin\n"
             f"flash:\n  adapter: fake\n{extra}"
             "evidence:\n  mode: swd\n"
+            "coverage:\n  notes: [chain intact]\n"
             "serial:\n  banner: 'BOOT {git}'\n"
             "  banner_timeout_s: 0.3\n", encoding="utf-8")
         (fw / "fw.bin").write_bytes(b"\x00" * 16)
@@ -175,6 +176,10 @@ class TestFakeBackendPipeline:
         assert cov["verified"] and "boot" in cov["verified"]
         assert any("physical" in x for x in cov["not_verified"])
         assert "statement" in cov and "profile_notes" in cov
+        # the REAL loader chain (mutation gap E, adversarial H1): the
+        # note must ARRIVE in the record — key-presence alone lets the
+        # board->record half break silently
+        assert cov["profile_notes"] == ["chain intact"]
 
     def test_wipe_lie_caught_by_readback_exit_5(self, tmp_path, monkeypatch):
         # L1: the backend reports a successful wipe but the memory still

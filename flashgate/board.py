@@ -139,6 +139,15 @@ def load_board(yaml_path: Path) -> Board:
         raise BoardError(
             f"board profile {yaml_path.name}: banner pattern does not "
             f"compile: {exc}") from exc
+    cov_raw = raw.get("coverage") or {}
+    notes_raw = cov_raw.get("notes") or []
+    if isinstance(notes_raw, (str, bytes)):
+        # a scalar would be iterated character-by-character into the
+        # record's honesty field (adversarial M3) — refuse at load time
+        raise BoardError(
+            f"board profile {yaml_path.name}: coverage.notes must be a "
+            f"LIST of strings (got a scalar)")
+    coverage_notes = tuple(str(x) for x in notes_raw)
     try:
         board = Board(
             name=raw["board"],
@@ -164,9 +173,7 @@ def load_board(yaml_path: Path) -> Board:
             evidence_mode=evidence_mode,
             sig_address=int(str(sig.get("address", "0x2001FF00")), 0),
             sig_size=int(sig.get("size", 64)),
-            coverage_notes=tuple(
-                str(x) for x in ((raw.get("coverage") or {}).get("notes")
-                                 or [])),
+            coverage_notes=coverage_notes,
             yaml_path=yaml_path,
         )
     except KeyError as exc:
