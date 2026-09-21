@@ -146,15 +146,25 @@ class TestSingleInstanceLock:
     process death (no stale lock files to clean up)."""
 
     def test_second_lock_same_fw_dir_rejected(self, tmp_path):
+        import socket
         import pytest
         from flashgate import bench_serve as bs
         lock = bs.acquire_bench_lock(tmp_path)
-        bs._start_lock_listener(lock, interrupt=lambda: None)
+        listener = bs._start_lock_listener(lock, interrupt=lambda: None)
         try:
             with pytest.raises(RuntimeError, match="one bench-serve per bench"):
                 bs.acquire_bench_lock(tmp_path)
         finally:
+            # Linux portability (CI ubuntu leg): a plain close() does NOT
+            # wake a thread blocked in accept(), so the port stays bound
+            # and the re-acquire below would see a live listener. shutdown
+            # wakes the accept on both platforms; join waits it out.
+            try:
+                lock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             lock.close()
+            listener.join(timeout=5)
         # released: acquirable again
         again = bs.acquire_bench_lock(tmp_path)
         again.close()
