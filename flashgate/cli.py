@@ -837,12 +837,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "bench-serve":
             from .bench_serve import serve, stop_bench
             if args.stop:
-                if stop_bench(board.firmware_dir):
+                try:
+                    stopping = stop_bench(board.firmware_dir)
+                except ValueError as exc:   # bad FLASHGATE_BENCH_LOCK_PORT_BASE
+                    print(_red(f"[bench-serve] {exc}"))
+                    return 2
+                if stopping:
                     print("[bench-serve] stop signalled — the server drains "
                           "its in-flight operation, then exits")
                     return 0
                 print("[bench-serve] no bench-serve is holding the lock for "
-                      f"{board.firmware_dir}")
+                      f"{board.firmware_dir} on the current lock-port base "
+                      "(FLASHGATE_BENCH_LOCK_PORT_BASE) — if the server was "
+                      "started with a different base, stop it from a shell "
+                      "with that same base set")
                 return 2
             return serve(board, args.device_id)
         simple = {

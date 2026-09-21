@@ -4,6 +4,7 @@ pin the semantics the shell must not dilute (including the busy-as-
 payload red line: transport success, structured busy error)."""
 
 import asyncio
+import random
 
 import pytest
 
@@ -14,6 +15,17 @@ from flashgate import records
 from flashgate.bench import BenchDriver, DuplicateBenchError
 from flashgate.bench_serve import _build_driver
 from tests.test_cli import make_board
+
+
+@pytest.fixture(autouse=True)
+def _random_lock_port_base(monkeypatch):
+    """A host process squatting the default 17500-18499 lock range made
+    these tests flaky (~15% per full run, measured with a static squatter
+    on 18432): move the whole range to a random base per run. Per-bench
+    determinism is preserved — same fw_dir still maps to the same port
+    under whatever base is active."""
+    monkeypatch.setenv("FLASHGATE_BENCH_LOCK_PORT_BASE",
+                       str(random.randrange(20000, 40000)))
 
 
 def _make(tmp_path, verify_fn):
@@ -135,15 +147,16 @@ class TestSingleInstanceLock:
 
     def test_second_lock_same_fw_dir_rejected(self, tmp_path):
         import pytest
-        from flashgate.bench_serve import acquire_bench_lock
-        lock = acquire_bench_lock(tmp_path)
+        from flashgate import bench_serve as bs
+        lock = bs.acquire_bench_lock(tmp_path)
+        bs._start_lock_listener(lock, interrupt=lambda: None)
         try:
             with pytest.raises(RuntimeError, match="one bench-serve per bench"):
-                acquire_bench_lock(tmp_path)
+                bs.acquire_bench_lock(tmp_path)
         finally:
             lock.close()
         # released: acquirable again
-        again = acquire_bench_lock(tmp_path)
+        again = bs.acquire_bench_lock(tmp_path)
         again.close()
 
     def test_different_fw_dirs_lock_independently(self, tmp_path):
@@ -160,12 +173,70 @@ class TestSingleInstanceLock:
         from tests.test_cli import make_board
         board = make_board(tmp_path)
         lock = bs.acquire_bench_lock(board.firmware_dir)
+        bs._start_lock_listener(lock, interrupt=lambda: None)
         try:
             rc = bs.serve(board)
             assert rc == 2
             assert "one bench-serve per bench" in capsys.readouterr().out
         finally:
             lock.close()
+
+
+class TestLockDiagnostics:
+    """The bind-failure message must blame the RIGHT holder: a real
+    bench-serve lock (answers the probe) gets the stop hint; an
+    unrelated squatter gets the honest unrelated-process message."""
+
+    def test_real_bench_lock_keeps_stop_hint(self, tmp_path):
+        import pytest
+        from flashgate import bench_serve as bs
+        lock = bs.acquire_bench_lock(tmp_path)
+        bs._start_lock_listener(lock, interrupt=lambda: None)
+        try:
+            with pytest.raises(RuntimeError,
+                               match="bench-serve --stop"):
+                bs.acquire_bench_lock(tmp_path)
+        finally:
+            lock.close()
+
+    def test_squatter_named_as_unrelated_process(self, tmp_path):
+        import socket as pysocket
+        import pytest
+        from flashgate import bench_serve as bs
+        port = bs._lock_port(tmp_path)
+        stranger = pysocket.socket()
+        stranger.bind(("127.0.0.1", port))
+        stranger.listen(1)
+        try:
+            with pytest.raises(RuntimeError,
+                               match="UNRELATED local process"):
+                bs.acquire_bench_lock(tmp_path)
+        finally:
+            stranger.close()
+
+    def test_port_base_default_and_override(self, tmp_path, monkeypatch):
+        from flashgate import bench_serve as bs
+        monkeypatch.delenv("FLASHGATE_BENCH_LOCK_PORT_BASE", raising=False)
+        assert 17500 <= bs._lock_port(tmp_path) < 18500
+        monkeypatch.setenv("FLASHGATE_BENCH_LOCK_PORT_BASE", "30000")
+        assert 30000 <= bs._lock_port(tmp_path) < 31000
+
+    def test_same_fw_dir_still_deterministic_per_base(self, tmp_path, monkeypatch):
+        from flashgate import bench_serve as bs
+        monkeypatch.setenv("FLASHGATE_BENCH_LOCK_PORT_BASE", "30000")
+        assert bs._lock_port(tmp_path) == bs._lock_port(tmp_path)
+
+    def test_port_base_out_of_range_or_garbage_rejected(self, tmp_path,
+                                                        monkeypatch):
+        # without the range check a base like 70000 surfaces as a raw
+        # OverflowError from bind() — not an OSError, so the honest
+        # diagnostics never fire (mutation round, 2026-09-21)
+        import pytest
+        from flashgate import bench_serve as bs
+        for bad in ("-1", "0", "1023", "63536", "70000", "abc"):
+            monkeypatch.setenv("FLASHGATE_BENCH_LOCK_PORT_BASE", bad)
+            with pytest.raises(ValueError, match="must be a port number"):
+                bs._lock_port(tmp_path)
 
 
 class TestStopChannel:

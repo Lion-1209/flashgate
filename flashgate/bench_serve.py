@@ -23,6 +23,7 @@ transport success alone.
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
 import threading
 import _thread
@@ -35,8 +36,39 @@ from .board import Board
 
 
 def _lock_port(fw_dir: Path) -> int:
-    return 17500 + (zlib.crc32(
+    # The 1000-port span is deterministic per fw_dir (same bench, same port
+    # — the single-instance property depends on it). The BASE is overridable
+    # so a host process squatting the default range can be sidestepped
+    # without changing the per-bench determinism (measured: one full test
+    # run makes ~160 lock attempts; a single static squatter hit ~15%).
+    raw = os.environ.get("FLASHGATE_BENCH_LOCK_PORT_BASE", "17500")
+    try:
+        base = int(raw)
+    except ValueError:
+        base = -1              # fall through to the guided message below
+    # 0 would make the OS assign ephemeral ports (the lock silently stops
+    # being a lock); <1024 needs privileges on Linux (adversarial H1/L2)
+    if base < 1024 or base > 64535 - 1000:
+        raise ValueError(
+            f"FLASHGATE_BENCH_LOCK_PORT_BASE={raw!r} must be a port number "
+            "in [1024, 63535] (the lock span adds up to 1000)")
+    return base + (zlib.crc32(
         str(fw_dir.resolve()).lower().encode("utf-8")) % 1000)
+
+
+def _held_by_bench_lock_listener(port: int) -> bool:
+    """Distinguish a real bench-serve lock from an unrelated squatter:
+    the lock listener answers any non-stop payload with
+    'unknown command'. A stranger stays silent, refuses, or says
+    something else — blame must land on the right holder."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as s:
+            s.settimeout(2)
+            s.sendall(b"flashgate-lock-probe\n")
+            reply = s.recv(128)
+    except OSError:
+        return False
+    return reply.strip() == b"unknown command"
 
 
 def acquire_bench_lock(fw_dir: Path) -> socket.socket:
@@ -56,10 +88,20 @@ def acquire_bench_lock(fw_dir: Path) -> socket.socket:
         return s
     except OSError:
         s.close()
+        port = _lock_port(fw_dir)
+        if _held_by_bench_lock_listener(port):
+            raise RuntimeError(
+                f"a bench-serve lock listener answers on lock port {port} "
+                f"— almost certainly another bench-serve for {fw_dir} "
+                "(one bench-serve per bench; stop it with `bench-serve "
+                "--stop`, do not kill it mid-verify. Rarely, a DIFFERENT "
+                "firmware dir hashed to the same port — stopping would "
+                "stop THAT bench)")
         raise RuntimeError(
-            f"another bench-serve for {fw_dir} appears to be running on "
-            f"this machine — one bench-serve per bench (the running one "
-            f"owns lock port {_lock_port(fw_dir)}; kill it first)")
+            f"lock port {port} is held by an UNRELATED local process "
+            f"(not a bench-serve) — free it (netstat -ano, then find the "
+            "PID) or set FLASHGATE_BENCH_LOCK_PORT_BASE to move the lock "
+            "range")
 
 
 def _start_lock_listener(lock: socket.socket,
@@ -273,7 +315,7 @@ def serve(board: Board, device_id: str | None = None) -> int:
 
     try:
         lock = acquire_bench_lock(board.firmware_dir)   # held for life
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         print(f"[bench-serve] {exc}")
         return 2
 

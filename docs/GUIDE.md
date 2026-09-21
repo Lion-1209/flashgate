@@ -1088,6 +1088,13 @@ export DEVICE_CONNECT_DISCOVERY_MODE=d2d
 flashgate --board boards/apollo-h743.yaml bench-serve
 ```
 
+单实例锁的端口由固件目录哈希到默认 17500-18499 段；本机若有别的进程
+占了这段（报错会如实区分"另一个 bench-serve"和"无关进程"），用
+`FLASHGATE_BENCH_LOCK_PORT_BASE` 把锁段整体挪开（合法域
+1024-63535，段宽 1000）。注意这是**环境耦合**的：`bench-serve --stop`
+按当前环境的基址找锁——服务端和停止端必须设同一个基址，否则停止端
+找不到服务器（报错里有提示）。
+
 远程调用方发现 `device_type=flashgate-bench` 后有四个函数可用：
 `describe_bench`（台架与探针清单）、`start_verify`（发起验证，立即
 返回 op_id）、`get_operation`（轮询到终态，终态快照带退出码和完整
