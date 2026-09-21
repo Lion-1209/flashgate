@@ -210,6 +210,20 @@ class TestContractSurfaces:
             assert key in text, f"record-schema.md lost the coverage key {key!r}"
         assert '"1.1"' in text
 
+    def test_coverage_trigger_wording_pinned(self):
+        # the three probe states must stay documented — a branch landing
+        # in code but not in the contract docs slipped through twice
+        # (audit rounds caught it both times); pin the phrases
+        text = (DOC.parent / "record-schema.md").read_text(encoding="utf-8")
+        for phrase in ("no probes were run",
+                       "planned but never executed",
+                       "ran but none passed"):
+            assert phrase in text, (
+                f"record-schema.md lost the coverage trigger phrase "
+                f"{phrase!r} — sync the docs with the code branches")
+        guide = (DOC.parent / "GUIDE.md").read_text(encoding="utf-8")
+        assert "已计划未执行" in guide and "无一通过" in guide
+
     def test_readme_and_guide_describe_coverage_block(self):
         # audit L-2: the README/GUIDE coverage paragraphs had no drift
         # guard — if they stop describing the block, this pin goes red
