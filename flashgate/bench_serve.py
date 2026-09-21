@@ -83,6 +83,16 @@ def acquire_bench_lock(fw_dir: Path) -> socket.socket:
     share a host."""
     s = socket.socket()
     try:
+        # POSIX only: answered probe connections die into TIME_WAIT with
+        # the lock port as their local port — without SO_REUSEADDR a Linux
+        # rebind after a quick stop/start hits EADDRINUSE. Windows must NOT
+        # set it: its SO_REUSEADDR behaves like SO_REUSEPORT and would let
+        # a second bench-serve bind over a LIVE listener, destroying the
+        # single-instance lock (caught by the lock tests, 2026-09-21).
+        # Windows needs no opt-in — it already allows rebinding over dead
+        # remnants by default.
+        if os.name != "nt":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("127.0.0.1", _lock_port(fw_dir)))
         s.listen(1)
         return s

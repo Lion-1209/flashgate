@@ -394,3 +394,20 @@ class TestDrainBudget:
         assert "drain budget exhausted" in out
         assert "WITHOUT a terminal snapshot" in out
         assert "drained:" not in out
+
+    def test_lock_socket_reuseaddr_is_platform_conditional(self, tmp_path):
+        # POSIX: probe connections die into TIME_WAIT holding the lock port
+        # as local port; without SO_REUSEADDR a quick re-acquire (bench
+        # restart) hits EADDRINUSE (CI ubuntu leg, 2026-09-21). Windows:
+        # SO_REUSEADDR would behave like SO_REUSEPORT and allow binding
+        # over a LIVE listener — the lock would be void, so it must be OFF
+        # there (caught locally, same day).
+        import os as _os
+        import socket
+        from flashgate import bench_serve as bs
+        lock = bs.acquire_bench_lock(tmp_path)
+        try:
+            got = lock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+            assert got == (0 if _os.name == "nt" else 1)
+        finally:
+            lock.close()
