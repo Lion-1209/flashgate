@@ -14,7 +14,7 @@ module owns:
   yet executing is cancelled outright; once executing, cancel is
   advisory (recorded on the operation) and the run completes with its
   real verdict — a flash/erase is never aborted halfway.
-- record association by the in-process write registry (records.LAST),
+- record association by the in-process thread-local write registry,
   never an mtime pick (the F3 lesson from the 0.6.0 adversarial review).
 
 Threading: cmd_verify runs in a daemon thread. Its console prints go to
@@ -55,7 +55,7 @@ class DuplicateBenchError(RuntimeError):
     """A driver for this firmware dir already exists in this process.
     One driver per firmware dir per process — otherwise two drivers'
     verifies interleave on the same board and the record registry
-    (process-global) can attach one bench's green evidence to another
+    (per-thread registry) can attach one bench's green evidence to another
     bench's failed operation (adversarial review F1)."""
 
 
@@ -102,7 +102,7 @@ class _Operation:
             "cancel_requested": self.cancel_requested,
             "error": self.error,
             # deep copy: a caller mutating its view must never reach the
-            # internal state or the process-global records registry (F3)
+            # internal state or the thread-local records registry (F3)
             "record": copy.deepcopy(self.record),
         }
 

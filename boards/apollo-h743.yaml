@@ -61,8 +61,9 @@ evidence:
 # Exit-code contract (what the M3 Stop hook consumes):
 #   0 = verified  1 = build failed  2 = flash failed  3 = no banner (timeout)
 #   4 = boot error string seen      5 = identity mismatch (board or git sha;
-#       on swd also: pre-start signature wipe failed or unconfirmed by
-#       readback — identity untrustworthy)
+#       on swd also: pre-start signature wipe failed, or its readback
+#       ANSWERED wrongly (nonzero/truncated) — identity untrustworthy;
+#       a readback that cannot run at all is 6)
 #   6 = env/prereq error (incl. probes required but console unavailable)
 #   7 = functional probe failed
 

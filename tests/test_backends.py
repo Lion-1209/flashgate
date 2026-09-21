@@ -201,6 +201,16 @@ class TestFakeBackendPipeline:
         fake = NoTool(signature=self._sig(b"aaaaaaa-dirty"))
         rc = self._run(tmp_path, fake, monkeypatch)
         assert rc == cli.EXIT_ENV
+        # record-level anchors are the load-bearing assertions: the
+        # crash-net also yields exit 6, only the named check tells the
+        # explicit branch from an aborted run (N0 v2, audit finding)
+        assert fake.calls.count("start_app") == 0
+        from flashgate import records
+        rec = records.latest_record(self._board(tmp_path).firmware_dir)
+        by = {c["name"]: c for c in rec["checks"]}
+        assert by["flash"]["status"] == "failed"
+        assert "could not run" in by["flash"]["detail"]
+        assert "SwdError" in by["flash"]["detail"]
 
     def test_wipe_readback_empty_or_short_fails_closed(self, tmp_path,
                                                        monkeypatch):
