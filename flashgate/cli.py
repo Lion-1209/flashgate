@@ -324,6 +324,7 @@ def _write_verify_record(board: Board, j: records.VerifyJournal, rc: int) -> Non
                                              cap=gatestate._HASH_CAP_BYTES)
         record = j.to_record(board, rc, records.status_word(rc),
                              summary=_exit_summary(rc))
+        record["coverage"] = records.build_coverage(board, record)
         record["board"]["profile_sha256"] = profile_sha
         path = records.write_record(record, board.firmware_dir, fingerprint)
         print(_cyan(f"[record] {path.name}  ({records.summarize_record(record)})"))

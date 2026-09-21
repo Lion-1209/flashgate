@@ -201,6 +201,15 @@ class TestContractSurfaces:
         assert self.CODES <= found, f"board profile comment missing: {self.CODES - found}"
 
 
+    def test_record_schema_documents_coverage_block(self):
+        # N1: the coverage block is part of the record contract — the
+        # schema doc must keep documenting its keys (desync pin)
+        text = (DOC.parent / "record-schema.md").read_text(encoding="utf-8")
+        for key in ("coverage", "verified", "not_verified", "profile_notes",
+                    "coverage.notes"):
+            assert key in text, f"record-schema.md lost the coverage key {key!r}"
+        assert '"1.1"' in text
+
     def test_record_schema_mentions_the_contract_range(self):
         # the 9th copy: record-schema.md describes exit_code as "the CLI
         # 0-7 contract" — a range-only copy, but if the contract ever

@@ -71,3 +71,10 @@ evidence:
 # fresh hardware verify before the agent may claim done.
 gate:
   watch: ["*.c", "*.h", "*.s", "*.ld", "*.ioc", "CMakeLists.txt", "*.cmake", "cmake/*"]
+
+# Coverage caveats copied verbatim into every record's coverage block:
+# what THIS bench's PASS still does not prove (T1 red line).
+coverage:
+  notes:
+    - "LED visibility to the eye is not independently observed; the probe asserts the firmware state machine and the TIM3 CCR register only"
+    - "single board, single bench, single toolchain version; no revision or environment spread"

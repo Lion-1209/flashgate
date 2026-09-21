@@ -317,3 +317,47 @@ class TestLastRegistryIsThreadLocal:
         th.start()
         th.join()
         assert seen["last"] is None, "a fresh thread must start empty"
+
+
+class TestCoverageBlock:
+    """N1: every record carries a 'what this PASS proves' statement —
+    a green record must never read as 'all functionality passed'."""
+
+    @staticmethod
+    def _board_notes(notes):
+        from types import SimpleNamespace
+        return SimpleNamespace(coverage_notes=tuple(notes))
+
+    def test_green_with_probes(self):
+        from flashgate import records
+        rec = {"checks": [
+            {"name": "build", "status": "passed"},
+            {"name": "boot", "status": "passed"},
+            {"name": "probe:led-demo", "status": "passed"},
+        ]}
+        cov = records.build_coverage(self._board_notes(["n1"]), rec)
+        assert cov["verified"] == ["build", "boot", "probe:led-demo"]
+        assert "n1" in cov["profile_notes"]
+        assert not any("no probes ran" in x for x in cov["not_verified"])
+        # the physical-effects caveat is ALWAYS present
+        assert any("physical" in x for x in cov["not_verified"])
+        assert "beyond the list" in cov["statement"]
+
+    def test_no_probes_says_functional_untested(self):
+        from flashgate import records
+        rec = {"checks": [{"name": "build", "status": "passed"},
+                          {"name": "boot", "status": "passed"}]}
+        cov = records.build_coverage(self._board_notes([]), rec)
+        assert any("no probes ran" in x for x in cov["not_verified"])
+
+    def test_failed_and_skipped_named(self):
+        from flashgate import records
+        rec = {"checks": [
+            {"name": "build", "status": "passed"},
+            {"name": "flash", "status": "failed"},
+            {"name": "boot", "status": "skipped"},
+        ]}
+        cov = records.build_coverage(self._board_notes([]), rec)
+        assert cov["failed_checks"] == ["flash"]
+        assert cov["skipped_checks"] == ["boot"]
+        assert "flash" not in cov["verified"]

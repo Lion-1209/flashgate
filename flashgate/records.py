@@ -27,7 +27,7 @@ from . import __version__
 if TYPE_CHECKING:                     # stdlib-only at runtime (CLI dep);
     from .board import Board          # Board is annotation-only
 
-RECORDS_SCHEMA_VERSION = "1.0"
+RECORDS_SCHEMA_VERSION = "1.1"   # 1.1: coverage block (what this PASS proves)
 RECORDS_DIRNAME = ".flashgate/records"
 
 # Retention: records are small (a few KB each), but a bench left running
@@ -212,6 +212,51 @@ class VerifyJournal:
         }
         record.update(self.meta)        # firmware.*, board extras, ...
         return record
+
+
+_PHYSICAL_EFFECTS_CAVEAT = (
+    "physical effects of probed features (register/console readbacks are "
+    "the firmware's own software observations, not independent physical "
+    "measurements)")
+
+_NOT_VERIFIED_BASE = [
+    _PHYSICAL_EFFECTS_CAVEAT,
+    "any peripheral or behavior outside the listed probes",
+    "environmental conditions (temperature/voltage margins, timing under "
+    "load)",
+]
+
+
+def build_coverage(board, record: dict) -> dict:
+    """The 'what this PASS proves' statement (T1 red line: a green record
+    must never read as 'all functionality passed').
+
+    Auto-derived from the record's own checks — verified lists what HELD,
+    not_verified names the standing blind spots every flashgate verdict
+    carries, and profile_notes lets a board add bench-specific caveats
+    (coverage.notes in the yaml)."""
+    checks = record.get("checks", [])
+    passed = [c.get("name") for c in checks if c.get("status") == "passed"]
+    failed = [c.get("name") for c in checks if c.get("status") == "failed"]
+    skipped = [c.get("name") for c in checks if c.get("status") == "skipped"]
+    probes_ran = any(n and n.startswith("probe:") for n in passed)
+    not_verified = list(_NOT_VERIFIED_BASE)
+    if not probes_ran:
+        not_verified.insert(
+            0, "functional behavior entirely — no probes ran; this record "
+            "proves boot identity only")
+    cov: dict = {
+        "statement": "the listed checks held on THIS board and bench for "
+                     "THIS tree — nothing beyond the list",
+        "verified": [n for n in passed if n],
+        "not_verified": not_verified,
+        "profile_notes": list(getattr(board, "coverage_notes", ()) or ()),
+    }
+    if failed:
+        cov["failed_checks"] = [n for n in failed if n]
+    if skipped:
+        cov["skipped_checks"] = [n for n in skipped if n]
+    return cov
 
 
 def records_dir(fw_dir: Path) -> Path:

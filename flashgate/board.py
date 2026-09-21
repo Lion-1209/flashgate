@@ -42,6 +42,7 @@ class Board:
     evidence_mode: str
     sig_address: int
     sig_size: int
+    coverage_notes: tuple[str, ...]
     yaml_path: Path
 
     def head_sha(self) -> str | None:
@@ -163,6 +164,9 @@ def load_board(yaml_path: Path) -> Board:
             evidence_mode=evidence_mode,
             sig_address=int(str(sig.get("address", "0x2001FF00")), 0),
             sig_size=int(sig.get("size", 64)),
+            coverage_notes=tuple(
+                str(x) for x in ((raw.get("coverage") or {}).get("notes")
+                                 or [])),
             yaml_path=yaml_path,
         )
     except KeyError as exc:

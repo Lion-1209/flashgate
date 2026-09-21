@@ -15,7 +15,7 @@ never silently absent (the record-level echo of the gate's core rule).
 
 | field | type | meaning |
 |---|---|---|
-| `schema_version` | `"1.0"` | this format; breaking changes bump the major |
+| `schema_version` | `"1.1"` | this format; breaking changes bump the major (1.1 added the `coverage` block) |
 | `kind` | `"flashgate.verify"` | record type (room for other kinds later) |
 | `record_id` | string | filename stem: `<ts>-<exit>-<fp8>` |
 | `tool` | object | `name`, `version`, `python`, `platform` of the verifier |
@@ -24,6 +24,19 @@ never silently absent (the record-level echo of the gate's core rule).
 | `run` | object | `mode` (`uart`\|`swd`), `probes` (requested list or null), `exit_code` (the CLI 0-7 contract), `status` (envelope word: succeeded/failed/timed_out/incomplete), `summary`, `started_at`, `finished_at`, `duration_ms` |
 | `checks` | array | per-step verdicts, in plan order |
 | `evidence` | array | raw material backing the verdicts |
+
+## coverage (schema 1.1)
+
+Every record carries a `coverage` block — the "what this PASS proves"
+statement. A green record must never read as "all functionality passed":
+
+| key | content |
+|---|---|
+| `statement` | fixed one-liner: the listed checks held on THIS board and bench for THIS tree — nothing beyond the list |
+| `verified` | names of the checks that HELD (status `passed`) |
+| `not_verified` | the standing blind spots: physical effects (register/console readbacks are the firmware's own software observations), everything outside the listed probes, environmental conditions; and "functional behavior entirely — no probes ran" whenever no probe passed |
+| `profile_notes` | verbatim `coverage.notes` from the board profile — bench-specific caveats |
+| `failed_checks` / `skipped_checks` | present only when applicable |
 
 ## checks[] entries
 
@@ -82,7 +95,7 @@ probe:*`; swd runs drop `console`. Steps after the first failure are
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "kind": "flashgate.verify",
   "record_id": "20260914T071500123-7-1a2b3c4d",
   "tool": {"name": "flashgate", "version": "0.6.0", "python": "3.11.9", "platform": "win32"},

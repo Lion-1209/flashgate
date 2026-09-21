@@ -142,7 +142,12 @@ per-check verdicts (`build`/`flash`/`boot`/`identity`/`probe:*`, with
 `skipped` meaning *never executed*, never a silent absence), the raw
 evidence behind them (banner line, SWD signature fields, console tails,
 failing probe transcripts), the artifact sha256, and the exact
-tree+profile+tool-version identity the verdict applies to. The MCP
+tree+profile+tool-version identity the verdict applies to. Every record
+also carries a `coverage` block — the "what this PASS proves" statement:
+what was verified, what was NOT (physical effects, everything outside
+the listed probes, environmental conditions), plus the board profile's
+own caveats (`coverage.notes`) — a green record never reads as "all
+functionality passed". The MCP
 `verify` tool returns the same record inline as `data.record`. Format:
 [docs/record-schema.md](docs/record-schema.md). Keep `.flashgate/` in your
 firmware repo's `.gitignore` (the shipped example does), or every record

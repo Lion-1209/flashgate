@@ -161,6 +161,21 @@ class TestFakeBackendPipeline:
         rc = self._run(tmp_path, fake, monkeypatch)
         assert rc == cli.EXIT_OK
 
+    def test_record_carries_coverage_block(self, tmp_path, monkeypatch):
+        # N1: the record's own boundary statement — verified lists what
+        # held, not_verified carries the standing blind spots
+        from flashgate import backends, cli, records
+        from flashgate.board import Board
+        fake = backends.FakeBackend(
+            signature=self._sig(b"aaaaaaa-dirty"))
+        monkeypatch.setattr(Board, "head_sha", lambda self: "aaaaaaa-dirty")
+        self._run(tmp_path, fake, monkeypatch)
+        rec = records.latest_record(self._board(tmp_path).firmware_dir)
+        cov = rec["coverage"]
+        assert cov["verified"] and "boot" in cov["verified"]
+        assert any("physical" in x for x in cov["not_verified"])
+        assert "statement" in cov and "profile_notes" in cov
+
     def test_wipe_lie_caught_by_readback_exit_5(self, tmp_path, monkeypatch):
         # L1: the backend reports a successful wipe but the memory still
         # holds the old magic — the readback must catch the silent lie.
