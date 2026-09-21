@@ -255,8 +255,7 @@ def build_coverage(board, record: dict) -> dict:
         # honesty class this block exists to prevent (audit M-1)
         not_verified.insert(
             0, "functional behavior — probes were planned but never "
-            "executed (see skipped_checks); an earlier step failed "
-            "before they could run")
+            "executed (see skipped_checks for the recorded reason)")
     elif not probes_passed:
         not_verified.insert(
             0, "functional behavior — probes ran but none passed (see "
