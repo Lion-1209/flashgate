@@ -338,7 +338,7 @@ def _exit_summary(rc: int) -> str:
         3: "board stayed silent (no boot evidence)",
         4: "boot error string on console",
         5: "on-board identity != repo state, or identity untrustworthy "
-           "(signature wipe failed or unconfirmed by readback)",
+           "(signature wipe failed, or its readback ANSWERED wrongly)",
         6: "environment error — a required check could not run",
         7: "functional probe failed",
     }.get(rc, f"exit {rc}")

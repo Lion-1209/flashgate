@@ -266,7 +266,7 @@ class BenchDriver:
         """Attach THIS run's evidence record via the in-process registry.
 
         Identity against the pre-run snapshot: a run that wrote nothing
-        new (LAST unchanged) carries no record — never a stale one, even
+        new (registry unchanged) carries no record — never a stale one, even
         when the previous write landed in the same clock tick (FINDING-1).
         No mtime fallback (F3): missing evidence stays honestly missing."""
         last = records.current_last()
