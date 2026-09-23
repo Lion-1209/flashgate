@@ -364,6 +364,12 @@ class TestCoverageBlock:
         assert any("never executed" in x for x in cov["not_verified"])
         assert not any("none passed" in x for x in cov["not_verified"])
         assert cov["skipped_checks"] == ["probe:led-demo"]
+        # M2 pin (glm3 v3): the never-executed line must not assert a
+        # specific cause — "an earlier step failed" is false on the crash
+        # path; restoring that clause must go red, presence-only checks
+        # let it slip through once already
+        assert all("earlier step failed" not in x
+                   for x in cov["not_verified"])
 
     def test_failed_probe_is_not_claimed_unrun(self):
         # adversarial M2: probes that RAN and failed must not be described
