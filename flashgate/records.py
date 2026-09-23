@@ -250,7 +250,7 @@ def build_coverage(board, record: dict) -> dict:
             0, "functional behavior entirely — no probes were run; this "
             "record proves boot identity only")
     elif not probes_executed:
-        # planned but NEVER executed (an earlier step failed first) —
+        # planned but NEVER executed (reason lives in skipped detail) —
         # "ran but none passed" would overstate what happened, the exact
         # honesty class this block exists to prevent (audit M-1)
         not_verified.insert(
