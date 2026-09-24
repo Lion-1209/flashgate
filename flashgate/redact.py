@@ -90,11 +90,20 @@ def _home_patterns(home: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
     layout, minus the drive letter (found on the first real redacted
     doctor report, 2026-09-24). The tree collapses to its basename like
     any other absolute path; separators match loosely so a forward-slash
-    home ("C:/Users/me") redacts like its backslash twin."""
-    parts = [re.escape(p) for p in re.split(r"[\\/]", home) if p]
-    sep = r"[\\/]"
-    body = sep.join(parts)
-    return (re.compile(body + rf"(?:{sep}{_SEG_WS})*{sep}({_SEG})"),
+    home ("C:/Users/me") redacts like its backslash twin.
+
+    The LEADING separator is part of that identity: splitting the home
+    on separators and dropping the empty leading piece (the first
+    implementation) turned "/home/alice" into "home[\\/]alice", which
+    matched the path's TAIL and left a stray slash behind — "dir
+    /<HOME>". That only shows up on a POSIX home, i.e. on the CI's
+    ubuntu legs, never on the Windows workstation it was written on."""
+    esc = re.escape(home)
+    sentinel = "\x00"              # the replacement itself contains
+    body = esc.replace("\\\\", sentinel).replace("/", sentinel)
+    body = body.replace(sentinel, r"[\\/]")   # a slash, so a chained
+    # replace would eat its own output — the sentinel breaks the cycle
+    return (re.compile(body + rf"(?:[\\/]{_SEG_WS})*[\\/]({_SEG})"),
             re.compile(body + r"(?!\w)"))
 
 

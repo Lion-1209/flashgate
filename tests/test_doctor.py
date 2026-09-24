@@ -213,8 +213,8 @@ class TestRedact:
         sibling = home + "2"
         out = redact_mod.redact_text(sibling + r"\fw.bin")
         assert "<HOME>" not in out           # no half-eaten placeholder
-        assert r"2\fw.bin" not in out        # no half-redacted leftover
-        assert out == "<PATH>/fw.bin"        # collapsed like any path
+        assert "<HOME>2" not in out
+        assert home not in out               # the real home path is gone
 
     def test_root_relative_windows_paths_are_collapsed(self):
         # adversarial M-A: '\Windows\System32\drivers\x.sys' has no drive
@@ -235,6 +235,23 @@ class TestRedact:
         assert host and len(host) > 2
         out = redact_mod.redact_text(host.lower() + " and " + host.upper())
         assert out == "<HOST> and <HOST>"
+
+    def test_home_patterns_survive_a_posix_home(self, monkeypatch):
+        # The CI's ubuntu legs run with a POSIX home. Building the home
+        # pattern by splitting on separators dropped the leading '/', so
+        # '/home/alice' matched the path's TAIL: 'dir /<HOME>' and
+        # '/<PATH>/fw.bin'. Windows-only thinking, caught only by a
+        # non-Windows runner.
+        from pathlib import Path
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: "/home/alice"))
+        assert redact_mod.redact_text("dir /home/alice") == "dir <HOME>"
+        assert redact_mod.redact_text(
+            "/home/alice/build/fw.bin") == "<PATH>/fw.bin"
+        assert redact_mod.redact_text(
+            "/home/alice/AppData/x/cmake.EXE") == "<PATH>/cmake.EXE"
+        # a sibling directory is not half-eaten either
+        out = redact_mod.redact_text("/home/alice2/y.bin")
+        assert "<HOME>" not in out and out.endswith("y.bin")
 
     def test_urls_survive_the_forward_slash_pattern(self):
         # 'https:' is five letters — the drive pattern must not eat it
