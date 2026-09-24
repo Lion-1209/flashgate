@@ -245,7 +245,13 @@ class OpenOcdBackend(DebugBackend):
         words = (size + 3) // 4
         rc, out = self._run([f"mdw 0x{address:08x} {words}"])
         if rc != 0:
-            return None
+            # A tool that could not RUN is not "no data": returning None
+            # here made wait_for_signature report "no valid signature
+            # yet" forever, and the diagnostic tool then told the user
+            # their firmware was old on a machine where openocd was
+            # simply missing (runtime audit S1, 2026-09-24). Raise, the
+            # way the CubeProgrammer path already does.
+            raise swdsig.SwdError(f"openocd memory read failed: {out[-300:]}")
         got: list[int] = []
         # OpenOCD mdw format: "0x2001ff00: f1a5c0de 00010001 ..." —
         # the ADDRESS carries 0x, the words do not.
@@ -327,3 +333,24 @@ def get_backend(name: str, **kwargs) -> DebugBackend:
     except KeyError:
         raise ValueError(
             f"unknown debug backend {name!r}; known: {known_backends()}") from None
+
+
+def backend_for_board(board) -> DebugBackend:
+    """The debug backend a board profile selects — the ONE construction
+    path every surface uses.
+
+    `get_backend(board.flash_adapter)` alone is NOT enough: the OpenOCD
+    backend needs the profile's mcu (target-script mapping) plus its
+    openocd_target / openocd_interface overrides. A surface that skipped
+    them got `OpenOcdBackend(mcu="")` -> target None -> every discovery
+    call returns "no target mapping" without ever running the tool, so
+    doctor reported "no probe detected — check the cable" on a bench
+    whose probe was plugged in and whose profile named the target
+    (adversarial H2, 2026-09-24). cli, doctor, MCP and bench all come
+    through here."""
+    if board.flash_adapter == "openocd":
+        return OpenOcdBackend(
+            mcu=board.mcu,
+            target=board.openocd_target or None,
+            interface=board.openocd_interface)
+    return get_backend(board.flash_adapter)

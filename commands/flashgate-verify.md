@@ -28,5 +28,7 @@ Interpret for the user:
   requested but the console UART being unavailable: a check that
   cannot run never counts as a pass. Reconnect the console; for a
   permanent ST-Link-only bench, remove --all-probes from the hook /
-  this command (editing the board profile does not help)
+  this command (editing the board profile does not help). `flashgate
+  doctor --export <file>` also exits 6 when the report file itself
+  cannot be written
 - exit 7: a probe failed — show the step transcript and the assertion

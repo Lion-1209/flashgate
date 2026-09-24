@@ -5,7 +5,8 @@ Exit-code contract (the M3 Stop hook enforces these):
   4 boot error string | 5 identity mismatch (git sha / board name, or
   the pre-start signature wipe failed / its readback ANSWERED wrongly
   — identity untrustworthy; a readback that cannot run at all is 6)
-  6 environment error (incl. probes required but console unavailable)
+  6 environment error (incl. probes required but console unavailable,
+  and a doctor --export whose report file could not be written)
   7 functional probe failed
 """
 
@@ -98,13 +99,13 @@ def _resolve_board(args: argparse.Namespace) -> Board:
 
 
 def _board_backend(board: Board) -> backends.DebugBackend:
-    """The debug backend a board profile selects (Phase 2)."""
-    if board.flash_adapter == "openocd":
-        return backends.OpenOcdBackend(
-            mcu=board.mcu,
-            target=board.openocd_target or None,
-            interface=board.openocd_interface or None)
-    return backends.get_backend(board.flash_adapter)
+    """The debug backend a board profile selects (Phase 2).
+
+    Thin alias over backends.backend_for_board — kept under this name
+    because tests monkeypatch it, and because every surface (doctor
+    included) must build the backend the SAME way: the profile's openocd
+    target/interface are part of the selection, not extras."""
+    return backends.backend_for_board(board)
 
 
 def _run(cmd: str, cwd: Path) -> tuple[int, str]:
@@ -116,66 +117,60 @@ def _run(cmd: str, cwd: Path) -> tuple[int, str]:
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
-def cmd_doctor(board: Board) -> int:
+def cmd_doctor(board: Board, export: str | None = None,
+               redact: bool = False) -> int:
+    from . import doctor as doctor_mod
+    report = doctor_mod.collect_report(board)
     print(_cyan(f"flashgate doctor — {board.name} ({board.mcu})"))
     print(f"  firmware   : {board.firmware_dir}")
     print(f"  artifact   : {board.artifact}")
-    problems: list[str] = []
-
-    backend = _board_backend(board)
-    exe = backend.available()
-    if exe:
-        print(_green(f"  backend    : {backend.name} ({exe})"))
-    else:
-        problems.append(f"backend {backend.name!r} executable not found")
-        print(_red(f"  backend    : {backend.name} — EXECUTABLE NOT FOUND"))
-
-    if exe:
-        listing = backend.discover()
-        if backend.probe_detected(listing):
-            print(_green("  probe      : detected"))
+    for c in report["checks"]:
+        if c["name"] == "head-sha":
+            print(f"  HEAD sha   : {c['detail']}")
+            continue
+        pad = " " * max(0, 10 - len(c["name"]))
+        line = f"  {c['name']}{pad} : {c['detail']}"
+        if c["ok"] is True:
+            print(_green(line))
+        elif c["ok"] is False:
+            print(_red(line))
         else:
-            problems.append("no debug probe detected (check USB, power, driver)")
-            print(_red("  probe      : none detected"))
-
-    port, why = serialmon.resolve_console_port(board.serial_port, board.usb_vid, board.usb_pids)
-    if port:
-        print(_green(f"  console    : {port} @ {board.baudrate}  [{why}]"))
-    else:
-        problems.append(f"console serial port unresolved: {why}")
-        print(_red(f"  console    : UNRESOLVED — {why}"))
-
-    env = augmented_env()
-    for tool in ("cmake", "ninja", "arm-none-eabi-gcc"):
-        found = shutil.which(tool, path=env.get("PATH"))
-        if found:
-            print(_green(f"  {tool:<10} : {found}"))
-        else:
-            problems.append(f"{tool} not found in PATH or ST bundles")
-            print(_red(f"  {tool:<10} : NOT FOUND"))
-
-    sha = board.head_sha()
-    print(f"  HEAD sha   : {sha or 'unknown'}")
-
-    # Live SWD signature: what the board is running RIGHT NOW, no serial needed
-    try:
-        info, _ = swdsig.wait_for_signature(
-            board.flash_connect, board.sig_address, board.sig_size, timeout_s=2.0,
-            read_fn=backend.read_mem)
-        if info:
-            print(_green(f"  on-board   : git={info['git']} build={info['build']} (SWD signature)"))
-        else:
-            print(_yellow("  on-board   : no SWD signature (old firmware?)"))
-    except swdsig.SwdError as exc:
-        print(_yellow(f"  on-board   : SWD read unavailable ({exc})"))
-
-    if problems:
+            print(_yellow(line))
+    if report["problems"]:
         print(_yellow("  issues:"))
-        for p in problems:
-            print(_yellow(f"    - {p}"))
-        return EXIT_ENV
-    print(_green("  all prerequisites OK"))
-    return EXIT_OK
+        for c in report["checks"]:
+            if c["ok"] is False:
+                # name + detail + hint: the console reader is the person
+                # holding the screwdriver, and a bare detail line made
+                # three different tools print the identical string
+                # ("not found in PATH or ST bundles" ×3) with no way to
+                # tell which one, and no fix advice at all (runtime
+                # audit F-A, 2026-09-24).
+                line = f"    - {c['name']}: {c['detail']}"
+                if c["hint"]:
+                    line += f" — {c['hint']}"
+                print(_yellow(line))
+        rc = EXIT_ENV
+    else:
+        print(_green("  all prerequisites OK"))
+        rc = EXIT_OK
+    if redact and not export:
+        print(_yellow("[doctor] --redact has no effect without --export"))
+    if export is not None:
+        # `is not None`, not truthiness: `--export ''` used to fall through
+        # as "no export requested" and exit 0 with nothing written
+        # (runtime audit F-B).
+        try:
+            out = doctor_mod.export_report(report, Path(export), redact=redact)
+        except doctor_mod.ExportError as exc:
+            # The requested file does not exist — a caller gating on rc=0
+            # must not believe support has a report that was never
+            # written. EXIT_ENV is the truthful "could not run" code.
+            print(_red(f"[doctor] could not export the report: {exc}"))
+            return EXIT_ENV
+        print(_cyan(f"[doctor] exported: {out} "
+                    f"({'redacted' if redact else 'as-is'})"))
+    return rc
 
 
 def _build(board: Board, j: records.VerifyJournal | None = None) -> int:
@@ -803,7 +798,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"flashgate {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("doctor", help="check ST-Link, console serial, toolchain")
+    p_doctor = sub.add_parser("doctor",
+                              help="check ST-Link, console serial, toolchain")
+    p_doctor.add_argument("--export", metavar="FILE",
+                          help="write the checkup as a sendable report "
+                               "('.json' suffix -> JSON, else markdown)")
+    p_doctor.add_argument("--redact", action="store_true",
+                          help="with --export: scrub local paths/host/user "
+                               "identity from the report")
     sub.add_parser("build", help="build the firmware")
     sub.add_parser("flash", help="flash + verify + start via ST-Link")
     p_verify = sub.add_parser("verify", help="full loop: build -> flash -> banner -> sha")
@@ -888,8 +890,11 @@ def main(argv: list[str] | None = None) -> int:
                       "with that same base set")
                 return 2
             return serve(board, args.device_id)
+        if args.cmd == "doctor":
+            return cmd_doctor(board, export=getattr(args, "export", None),
+                              redact=getattr(args, "redact", False))
         simple = {
-            "doctor": cmd_doctor, "build": cmd_build,
+            "build": cmd_build,
             "flash": cmd_flash, "console": cmd_console,
         }
         return simple[args.cmd](board)

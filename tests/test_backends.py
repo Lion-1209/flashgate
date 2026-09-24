@@ -5,6 +5,7 @@ CubeProgrammer."""
 import pytest
 
 from flashgate import backends
+from flashgate import swdsig
 
 
 class TestRegistry:
@@ -35,10 +36,16 @@ class TestReadMemParsing:
         blob = b.read_mem("x", 0x2001FF00, 8)
         assert blob == bytes.fromhex("dec0a5f1" "00010001")
 
-    def test_failed_run_returns_none(self, monkeypatch):
+    def test_failed_run_raises_swd_error(self, monkeypatch):
+        # A tool that could not RUN is not "no data": returning None made
+        # wait_for_signature report "no valid signature yet" forever, so
+        # an openocd bench on a machine without openocd was told its
+        # firmware was old (runtime audit S1, 2026-09-24). CubeProgrammer's
+        # read_ram already raised — this is the same contract.
         b = backends.OpenOcdBackend(mcu="STM32H743IIT6")
         monkeypatch.setattr(b, "_run", lambda cmds: (1, "boom"))
-        assert b.read_mem("x", 0, 64) is None
+        with pytest.raises(swdsig.SwdError):
+            b.read_mem("x", 0, 64)
 
     def test_unparsed_output_returns_none(self, monkeypatch):
         b = backends.OpenOcdBackend(mcu="STM32H743IIT6")

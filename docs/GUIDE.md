@@ -103,21 +103,25 @@ flashgate doctor
 flashgate doctor — apollo-h743 (STM32H743IIT6)
   firmware   : E:\...\examples\apollo-h743
   artifact   : E:\...\examples\apollo-h743\build\Debug\Apollo.bin
-  programmer : C:\...\bundles\programmer\2.23.0\bin\STM32_Programmer_CLI.exe
-  ST-Link    : ST-LINK SN  : 56FF6D067180545731431967
+  backend    : cubeprogrammer (C:\...\STM32_Programmer_CLI.exe)
+  probe      : detected
   console    : COM3 @ 115200  [VID/PID hint 1A86:7523 (USB-SERIAL CH340 (COM3))]
   cmake      : ...\cmake\4.2.3+st.1\bin\cmake.EXE
   ninja      : ...\ninja\1.13.2+st.1\bin\ninja.EXE
   arm-none-eabi-gcc : ...\gnu-tools-for-stm32\14.3.1+st.2\bin\arm-none-eabi-gcc.EXE
-  HEAD sha   : 2b6488b
+  HEAD sha   : 4c8340e-dirty
+  on-board   : git=360a2e0-dirty build=2026-09-21T10:04:13Z (SWD signature)
   all prerequisites OK
 ```
 
 每一行的含义：firmware 和 artifact 是从板卡档案读的固件位置和编译产物；
-programmer 是找到的烧录器程序；ST-Link 那行读的是探针序列号，能打出来
-说明探针真的连上了；console 是解析出来的串口，方括号里说明它是怎么被
-选中的（这里是因为 VID/PID 匹配到了 CH340）；后面三个是编译工具；HEAD
-sha 是固件仓库当前版本，等会儿 verify 要拿它跟板子报告的版本对。
+backend 是找到的烧录后端（cubeprogrammer / openocd，由档案里的
+`flash.adapter` 决定）；probe 那行说明调试探针真的连上了；console 是解析
+出来的串口，方括号里说明它是怎么被选中的（这里是因为 VID/PID 匹配到了
+CH340）；后面三个是编译工具；HEAD sha 是固件仓库当前版本，等会儿 verify
+要拿它跟板子报告的版本对；最后一行 on-board 是体检当时从板上 RAM 里读到的
+固件身份（只走 ST-Link，不占串口），它能告诉你板子现在跑的是哪一版——
+和你以为它在跑的版本对不上时，这行就是线索。
 
 有一行红的就是环境没齐，照着提示修。都绿了就可以跑完整的：
 
@@ -125,6 +129,28 @@ sha 是固件仓库当前版本，等会儿 verify 要拿它跟板子报告的�
 flashgate verify --all-probes
 echo "exit=$LASTEXITCODE"
 ```
+
+要把体检结果发给别人（板厂售后、同事排障），一条命令产出可发送的报告：
+
+```powershell
+flashgate doctor --export checkup.md        # markdown，人看
+flashgate doctor --export checkup.json      # JSON，脚本读
+flashgate doctor --export checkup.md --redact   # 顺带抹掉本机身份
+```
+
+报告是"结论在前"的一页纸：先给总判定，再逐项列检查和修复建议，最后是板
+上身份。每个红项都带一句人话建议，无工具链的机器上全红也一样读得懂。
+`--redact` 会把本机路径、主机名、用户名替换成 `<PATH>` / `<HOME>` /
+`<HOST>` / `<USER>` 占位符，只保留文件名（`cmake.EXE`、档案 yaml 名）——
+support 仍然知道是哪个文件，但看不到你的目录结构。带空格的路径
+（`C:\Program Files\...`）和网络路径（`\\server\share\...`）同样只留文件名。
+导出失败（目录不存在、没权限）会以 exit 6 结束并说明原因，不会留一个"以为
+发出去了、其实没有文件"的静默失败。体检单只覆盖表中这些检查项，不代表固件
+功能被验证过。
+
+导出位置提醒：**写到固件仓库外面**（或者仓库里已经被 ignore 的
+`.flashgate/` 下）。体检单是未跟踪文件，落在被 watch 的目录里会改变树指纹，
+让 Stop hook 里缓存的那次 PASS 失效、下次收工重新验一遍硬件。
 
 这条命令在做什么，以及每步花多久：
 
@@ -235,7 +261,7 @@ swd 通道的局限是没有功能探针，探针需要串口的双向能力。
 | 3 | 板子没出声（无 banner 或无签名，超时） |
 | 4 | 串口输出里出现错误模式（HardFault、断言之类） |
 | 5 | 板上固件的身份跟仓库对不上（git sha 或 board 名）；swd 通道还包括旧签名擦除失败、或回读"答了错话"（非零/截断）——身份不可信宁可失败（回读根本跑不起来归 6） |
-| 6 | 环境问题（ST-Link 没连、串口找不到、工具链缺失）；也包括显式要求探针（--probe/--all-probes）但串口不可用——跑不了的检查不算通过 |
+| 6 | 环境问题（ST-Link 没连、串口找不到、工具链缺失）；也包括显式要求探针（--probe/--all-probes）但串口不可用——跑不了的检查不算通过；`doctor --export` 写不出文件时也是 6 |
 | 7 | 功能探针失败 |
 
 ## 6. 固件怎么对接 flashgate
@@ -990,6 +1016,9 @@ verify 会重写板上固件）。mcp 2.x 下信封同时走 MCP 结构化通道
 ## 10. 排错
 
 以下每一条都是实际遇到过、修过的问题。
+
+环境问题要发给别人看时，先跑 `flashgate doctor --export checkup.md`（要脱敏
+加 `--redact`），把这一页纸贴过去，比截图逐行描述高效得多。
 
 串口解析不出来（doctor 报 console UNRESOLVED）。先看线插没插。插了
 还不行，多半是 USB 转 TTL 芯片跟档案里的 vid/pids 提示对不上，改

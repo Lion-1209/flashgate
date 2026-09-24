@@ -20,6 +20,7 @@ _KNOWN_SUBCOMMANDS = {
 _KNOWN_FLAGS = {
     "--board", "--all-probes", "--probe", "--json", "--evidence",
     "--device-id", "--stop", "--version",
+    "--export", "--redact",
 }
 
 
@@ -241,8 +242,24 @@ class TestContractSurfaces:
         assert m, "record-schema.md lost its exit-code contract phrase"
         assert (int(m.group(1)), int(m.group(2))) == (0, 7)
 
+    def test_shipped_example_ignores_the_state_dir(self):
+        # Four doc copies (README / GUIDE / ci-recipes / record-schema)
+        # claim "the shipped example already ignores .flashgate/" — a
+        # botched edit (d8a27d8 meant to add .settings/ and replaced the
+        # .flashgate line instead) made that claim false, so every record
+        # write churned `git status` in the example firmware repo. Pin
+        # the claim to the filesystem.
+        ignore = (DOC.parent.parent / "examples" / "apollo-h743"
+                  / ".gitignore").read_text(encoding="utf-8")
+        patterns = [ln.strip() for ln in ignore.splitlines()
+                    if ln.strip() and not ln.strip().startswith(("!", "#"))]
+        assert ".flashgate/" in patterns, (
+            "examples/apollo-h743/.gitignore lost '.flashgate/' — records "
+            "and state.json will churn git status again")
+        assert ".settings/" in patterns, (
+            "the STM32CubeIDE .settings/ ignore from d8a27d8 is gone")
+
     def test_demo_md_stays_non_contractual(self):
-        # DEMO.md is a narrative transcript archive, ADJUDICATED out of
         # the contract-surface set (N0-5). If someone ever turns it into
         # a full enumerated exit-code copy, it must join
         # TestContractSurfaces instead of silently drifting.

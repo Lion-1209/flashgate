@@ -1,4 +1,5 @@
 build
 mx.scratch
 !.settings
-.flashgate.settings/
+.settings/
+.flashgate/
