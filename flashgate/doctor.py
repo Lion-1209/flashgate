@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__, backends, serialmon, swdsig
+from .mdsafe import md_cell
 from .sttools import augmented_env
 
 
@@ -149,24 +150,6 @@ def collect_report(board) -> dict:
     }
 
 
-def _md_cell(text: str) -> str:
-    """Make one string safe inside a markdown table cell or heading.
-
-    The report is handed to a third party as EVIDENCE, so a value that
-    can carry a newline or a pipe must not be able to forge table rows
-    or whole sections. Both injection sources are real: the board
-    profile (serial.port / board name are unvalidated strings) and the
-    on-board signature (decoded from firmware RAM with
-    errors="replace", so a '|' or newline in the git field survives)
-    — adversarial M-1. Link/image/HTML syntax is escaped as well: a
-    clickable "[x](http://evil)" inside a forwarded report is a phishing
-    vector even though it cannot forge the verdict itself (M-B)."""
-    text = str(text)
-    for ch in ("|", "[", "]", "<", ">"):
-        text = text.replace(ch, "\\" + ch)
-    text = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
-    return text.strip()
-
 
 def render_markdown(report: dict) -> str:
     """A standalone, sendable health page: verdict first, then every
@@ -174,35 +157,35 @@ def render_markdown(report: dict) -> str:
     verdict = ("ALL CHECKS PASSED" if report["all_ok"]
                else f"{len(report['problems'])} PROBLEM(S) FOUND")
     icon = "✅" if report["all_ok"] else "❌"
-    lines = [f"# flashgate 环境体检单 — {_md_cell(report['board']['name'])}",
+    lines = [f"# flashgate 环境体检单 — {md_cell(report['board']['name'])}",
              "",
              f"**{icon} {verdict}**",
              "",
-             f"- 生成时间（UTC）：{_md_cell(report['generated_at'])}",
-             f"- flashgate 版本：{_md_cell(report['tool']['version'])}",
-             f"- 板卡：{_md_cell(report['board']['name'])} "
-             f"({_md_cell(report['board']['mcu'])})",
-             f"- 档案：`{_md_cell(report['board']['profile'])}`",
+             f"- 生成时间（UTC）：{md_cell(report['generated_at'])}",
+             f"- flashgate 版本：{md_cell(report['tool']['version'])}",
+             f"- 板卡：{md_cell(report['board']['name'])} "
+             f"({md_cell(report['board']['mcu'])})",
+             f"- 档案：`{md_cell(report['board']['profile'])}`",
              "",
              "| 检查项 | 结果 | 详情 |",
              "|---|---|---|"]
     for c in report["checks"]:
         status = {True: "✅", False: "❌", None: "⚠️"}[c["ok"]]
-        lines.append(f"| {_md_cell(c['name'])} | {status} "
-                     f"| {_md_cell(c['detail'])} |")
+        lines.append(f"| {md_cell(c['name'])} | {status} "
+                     f"| {md_cell(c['detail'])} |")
     lines.append("")
     if report["problems"]:
         lines.append("## 问题与建议修复")
         for c in report["checks"]:
             if c["ok"] is False:
-                hint = f" —— {_md_cell(c['hint'])}" if c["hint"] else ""
-                lines.append(f"- **{_md_cell(c['name'])}**："
-                             f"{_md_cell(c['detail'])}{hint}")
+                hint = f" —— {md_cell(c['hint'])}" if c["hint"] else ""
+                lines.append(f"- **{md_cell(c['name'])}**："
+                             f"{md_cell(c['detail'])}{hint}")
         lines.append("")
     ob = report["on_board"]
     if ob.get("git") or ob.get("note"):
-        note = (f"git={_md_cell(ob['git'])} build={_md_cell(ob['build'])}"
-                if ob.get("git") else _md_cell(ob.get("note", "")))
+        note = (f"git={md_cell(ob['git'])} build={md_cell(ob['build'])}"
+                if ob.get("git") else md_cell(ob.get("note", "")))
         lines.extend(["## 板上当前运行的固件", "",
                       f"{note}（体检时读到的实际状态）", ""])
     lines.extend(["---",

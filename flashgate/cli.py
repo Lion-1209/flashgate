@@ -6,7 +6,7 @@ Exit-code contract (the M3 Stop hook enforces these):
   the pre-start signature wipe failed / its readback ANSWERED wrongly
   — identity untrustworthy; a readback that cannot run at all is 6)
   6 environment error (incl. probes required but console unavailable,
-  and a doctor --export whose report file could not be written)
+  and a doctor/records --export whose file could not be written)
   7 functional probe failed
 """
 
@@ -772,6 +772,33 @@ def cmd_probe(board: Board, names: list[str] | None) -> int:
         conn.close()
 
 
+def cmd_records(board: Board, export: str | None, all_records: bool,
+                redact: bool) -> int:
+    """List the evidence archive, or export a sendable package of it."""
+    from . import recordsexport
+    if export is None:
+        if redact:
+            # the table view prints the records directory path; a user
+            # who believes --redact applied would forward it (adversarial
+            # L-1). Same warning doctor already gives.
+            print(_yellow("[records] --redact has no effect without "
+                          "--export"))
+        print(recordsexport.render_table(board.firmware_dir))
+        return EXIT_OK
+    try:
+        out = recordsexport.export_records(
+            board.firmware_dir, Path(export),
+            all_records=all_records, redact=redact)
+    except recordsexport.ExportError as exc:
+        # nothing to export / unwritable target: a caller gating on rc=0
+        # must not believe a package exists that was never written
+        print(_red(f"[records] could not export: {exc}"))
+        return EXIT_ENV
+    print(_cyan(f"[records] exported: {out} "
+                f"({'redacted' if redact else 'as-is'})"))
+    return EXIT_OK
+
+
 def cmd_console(board: Board) -> int:
     port, why = _console_port(board)
     if port is None:
@@ -821,6 +848,19 @@ def main(argv: list[str] | None = None) -> int:
     p_probe = sub.add_parser("probe", help="run probes against running firmware")
     p_probe.add_argument("names", nargs="*", metavar="NAME",
                          help="probe names (default: all defined in the board profile)")
+    p_records = sub.add_parser(
+        "records", help="list / export verification records (the evidence archive)")
+    p_records.add_argument("--export", metavar="FILE",
+                           help="write the selected records to FILE "
+                                "('.json' suffix -> JSON, else markdown)")
+    p_records_sel = p_records.add_mutually_exclusive_group()
+    p_records_sel.add_argument("--latest", action="store_true",
+                               help="export the newest record (default)")
+    p_records_sel.add_argument("--all", action="store_true",
+                               help="export every retained record")
+    p_records.add_argument("--redact", action="store_true",
+                           help="scrub local paths/host/user identity from "
+                                "the export")
     sub.add_parser("console", help="live serial monitor")
     p_bench = sub.add_parser(
         "bench-serve", help="expose this bench over device-connect (optional extra: flashgate[bench])")
@@ -893,6 +933,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "doctor":
             return cmd_doctor(board, export=getattr(args, "export", None),
                               redact=getattr(args, "redact", False))
+        if args.cmd == "records":
+            return cmd_records(board, export=getattr(args, "export", None),
+                               all_records=getattr(args, "all", False),
+                               redact=getattr(args, "redact", False))
         simple = {
             "build": cmd_build,
             "flash": cmd_flash, "console": cmd_console,

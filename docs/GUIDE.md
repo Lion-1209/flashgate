@@ -261,7 +261,7 @@ swd 通道的局限是没有功能探针，探针需要串口的双向能力。
 | 3 | 板子没出声（无 banner 或无签名，超时） |
 | 4 | 串口输出里出现错误模式（HardFault、断言之类） |
 | 5 | 板上固件的身份跟仓库对不上（git sha 或 board 名）；swd 通道还包括旧签名擦除失败、或回读"答了错话"（非零/截断）——身份不可信宁可失败（回读根本跑不起来归 6） |
-| 6 | 环境问题（ST-Link 没连、串口找不到、工具链缺失）；也包括显式要求探针（--probe/--all-probes）但串口不可用——跑不了的检查不算通过；`doctor --export` 写不出文件时也是 6 |
+| 6 | 环境问题（ST-Link 没连、串口找不到、工具链缺失）；也包括显式要求探针（--probe/--all-probes）但串口不可用——跑不了的检查不算通过；`doctor --export` / `records --export` 写不出文件时也是 6 |
 | 7 | 功能探针失败 |
 
 ## 6. 固件怎么对接 flashgate
@@ -1112,6 +1112,39 @@ MCP 的 `verify` 工具会把本次运行的记录内联返回（`data.record`�
 永远不会改变验证结论和退出码；目录自动只保留最新 500 份记录，
 旧的在每次写入后被清理。想给脚本消费：`flashgate verify --json`
 会把本次记录以纯 JSON 打到 stdout（人读日志转去 stderr）。
+
+### 把记录发给别人（售后排障）
+
+`flashgate records` 先看有哪些记录（新的在上，默认列 20 条）：
+
+```powershell
+flashgate records
+```
+
+选定一份或全部，导出成一个可以直接转发给板厂售后的文件：
+
+```powershell
+flashgate records --export case.md              # 最新一份，markdown
+flashgate records --export case.json            # 最新一份，JSON
+flashgate records --export case.md --all        # 全部保留的记录
+flashgate records --export case.md --redact     # 顺带抹掉本机身份
+```
+
+导出页是"结论在前"的一页纸：先是所有记录的摘要表，然后每份记录一节
+——板卡与两重身份（源码指纹/产物哈希）、逐项检查结论、**coverage 段
+（这次结论证明了什么、没验证什么、档案警示，逐字带入）**、以及板子的
+原话（banner 原文、SWD 签名、超时时的串口尾部、失败探针的完整对话）。
+
+`--redact` 与 `doctor --export --redact` 用同一个脱敏工具：本机路径只留
+文件名（`<PATH>/Apollo.bin`）、home 目录树整体折叠、UNC 与无盘符根路径
+同样、主机名/用户名只换整词。导出件可以 grep 一遍确认——测试里就有这条
+自动化断言，红了说明脱敏漏了。导出失败（没有记录、目录不可写、目标是
+Windows 设备名）会以 exit 6 结束并说明原因，不会留一个"以为发出去了、
+其实没有文件"的静默失败。无法解析的记录会在页首如实列出，不会被悄悄
+丢掉。
+
+导出位置同样提醒：**写到固件仓库外面**，否则未跟踪文件会改变树指纹，
+让 Stop hook 缓存的那次 PASS 失效。
 
 ## 13. 远程台架（bench-serve）
 

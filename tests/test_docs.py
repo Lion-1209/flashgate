@@ -16,11 +16,12 @@ DOC = Path(__file__).resolve().parent.parent / "docs" / "ci-recipes.md"
 
 _KNOWN_SUBCOMMANDS = {
     "doctor", "build", "flash", "verify", "probe", "console", "bench-serve",
+    "records",
 }
 _KNOWN_FLAGS = {
     "--board", "--all-probes", "--probe", "--json", "--evidence",
     "--device-id", "--stop", "--version",
-    "--export", "--redact",
+    "--export", "--redact", "--latest", "--all",
 }
 
 
@@ -120,12 +121,29 @@ def _cli_surface() -> tuple[set, set]:
     top = help_of()
     m = re.search(r"\{([^}]+)\}", top)
     subs = set(m.group(1).split(",")) if m else set()
-    flags = {f for f in re.findall(r"\[(--[\w-]+)[\] =]", top)}
+    # Flags come from the options section, one declared flag per line.
+    flags = _help_flags(top)
     for s in sorted(subs):
         if s.startswith("-"):
             continue
-        flags |= {f for f in re.findall(r"\[(--[\w-]+)[\] =]", help_of(s))}
+        flags |= _help_flags(help_of(s))
     return subs, flags
+
+
+def _help_flags(help_text: str) -> set:
+    """Every flag the options section declares, one per line.
+
+    Line-anchored on purpose: usage lines WRAP (a long `verify` usage puts
+    --evidence/--json on a continuation line that no usage-anchored scan
+    sees), and a mutually-exclusive group renders as "[--latest | --all]"
+    where only the first flag follows a '['. Help prose does not start a
+    line with '--', so the anchored scan is exact."""
+    flags: set = set()
+    for line in help_text.splitlines():
+        m = re.match(r"\s+(--[\w-]+)", line)
+        if m:
+            flags.add(m.group(1))
+    return flags
 
 
 class TestContractSurfaces:
@@ -201,6 +219,59 @@ class TestContractSurfaces:
         found = {int(c) for c in re.findall(r"(?<![\w])([0-7])\s*=", text)}
         assert self.CODES <= found, f"board profile comment missing: {self.CODES - found}"
 
+
+    def test_export_exit6_wording_covers_every_surface(self):
+        # N3: cli.py's docstring learned about `records --export` failing
+        # with 6, but three of the four contract copies still named only
+        # `doctor --export`. The code-set pins cannot see wording, so pin
+        # the wording: wherever a copy mentions an --export failure, it
+        # must name both surfaces.
+        #
+        # The whole ENTRY is gathered, not just its first line: two of
+        # these copies wrap the exit-6 text across lines, and a
+        # first-line-only check silently passes on the continuation
+        # (the pin's own blind spot, found while closing the round).
+        readme = (DOC.parent.parent / "README.md").read_text(encoding="utf-8")
+        guide = (DOC.parent / "GUIDE.md").read_text(encoding="utf-8")
+        verify_cmd = (DOC.parent.parent / "commands" / "flashgate-verify.md") \
+            .read_text(encoding="utf-8")
+        cli_doc = __import__("flashgate.cli", fromlist=["x"]).__doc__ or ""
+
+        def entry(text, start_pred, stop_pred):
+            lines = text.splitlines()
+            i = next((n for n, ln in enumerate(lines) if start_pred(ln)), None)
+            assert i is not None, "no exit-6 entry found"
+            body = [lines[i]]
+            for ln in lines[i + 1:]:
+                if stop_pred(ln):
+                    break
+                body.append(ln)
+            return "\n".join(body)
+
+        table_row = lambda ln: ln.lstrip().startswith("| 6 |")       # noqa: E731
+        next_table_row = lambda ln: ln.lstrip().startswith("| ")     # noqa: E731
+        bullet = lambda ln: ln.lstrip().startswith("- exit 6:")      # noqa: E731
+        next_bullet = lambda ln: ln.lstrip().startswith("- exit ")   # noqa: E731
+        numbered = lambda ln: re.match(r"\s*6 [a-z]", ln)            # noqa: E731
+        next_numbered = lambda ln: re.match(r"\s*[0-57] [a-z]", ln)  # noqa: E731
+
+        surfaces = {
+            "README.md": entry(readme, table_row, next_table_row),
+            "GUIDE.md": entry(guide, table_row, next_table_row),
+            "commands/flashgate-verify.md": entry(verify_cmd, bullet,
+                                                  next_bullet),
+            "cli.py docstring": entry(cli_doc, numbered, next_numbered),
+        }
+        for name, row in surfaces.items():
+            assert row.strip(), f"{name}: empty exit-6 entry"
+            if "--export" in row:
+                assert "records" in row and "doctor" in row, (
+                    f"{name}: the exit-6 entry mentions an --export "
+                    f"failure but not both surfaces: {row.strip()}")
+            else:
+                raise AssertionError(
+                    f"{name}: the exit-6 entry no longer mentions the "
+                    f"--export failure at all: {row.strip()}")
 
     def test_record_schema_documents_coverage_block(self):
         # N1: the coverage block is part of the record contract — the

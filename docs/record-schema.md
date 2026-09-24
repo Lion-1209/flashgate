@@ -59,8 +59,25 @@ probe:*`; swd runs drop `console`. Steps after the first failure are
 | `source` | where it came from (`COM3`, `RAM@0x2001ff00`, probe name) |
 | `content` | the raw material (matched banner line, parsed signature fields, last console output, failing step transcript); bounded to 4000 chars |
 
-## Guarantees
+## Sending a record outward (`flashgate records --export`)
 
+A record is the after-sales deliverable, so the archive can be exported
+as one sendable document: `flashgate records` lists what is retained,
+`--export <file>` writes the newest record (`--all` for every retained
+one), `.json` selects JSON and anything else selects markdown.
+`--redact` scrubs the workstation's identity through the shared redaction
+util (absolute paths keep only their basename, the home tree collapses,
+UNC and root-relative paths included, hostname/username only as whole
+tokens) — the same scrubber `doctor --export --redact` uses.
+
+The export carries no new verdicts: every section is a rendering of what
+the record already contains, coverage block included. A record that
+cannot be parsed is listed in `export.unreadable` and named in the
+markdown header — never silently dropped. An empty selection, an
+unwritable target, or a Windows device name (NUL/CON) is an error
+(exit 6) rather than an empty or phantom file.
+
+## Guarantees
 - A record exists for **failed** runs, not only passing ones.
 - Two identities, two granularities: `tree_fingerprint` identifies the
   SOURCE (stable across builds of one tree state);

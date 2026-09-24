@@ -91,7 +91,7 @@ fresh clone verifies out of the box once wired up.
 | 3 | board stayed silent (no banner / no signature within timeout) |
 | 4 | error string seen on serial (HardFault, assertion) |
 | 5 | on-board identity ≠ repo state (git sha or board name) — or the identity evidence channel could not be reset: a failed pre-start signature wipe, or a readback that ANSWERED wrongly — nonzero, or a truncated rc-0 dump (the wipe is read back and verified; a backend silently lying about it is caught) — fails closed (exit 5, start withheld); a readback that cannot RUN at all is an environment failure (exit 6). A surviving old-boot signature must never count as a pass |
-| 6 | environment error (no ST-Link / serial / tools) — including probes explicitly required via `--probe`/`--all-probes` but the console UART is unavailable: a check that cannot run never counts as a pass; also `doctor --export` when the report file cannot be written |
+| 6 | environment error (no ST-Link / serial / tools) — including probes explicitly required via `--probe`/`--all-probes` but the console UART is unavailable: a check that cannot run never counts as a pass; also `doctor --export` / `records --export` when the file cannot be written |
 | 7 | functional probe failed |
 
 ## Contributing
@@ -157,6 +157,16 @@ warning, never a changed exit code — and a crashed run still leaves one.
 The newest ~500 records are kept (best-effort pruning). `flashgate verify
 --json` prints this run's record as pure-ASCII JSON on stdout (human logs
 move to stderr) for scripting — safe on any console codepage.
+
+To hand a record to vendor support, export the archive as one sendable
+page: `flashgate records` lists what is retained, `flashgate records
+--export case.md [--all] [--redact]` writes it (`.json` for JSON). The
+export re-renders what the record already holds — coverage block and raw
+evidence included — and `--redact` scrubs the workstation's identity
+through the same util `doctor --export --redact` uses (paths keep only
+their basename). A record that cannot be parsed is named, never silently
+dropped; an empty selection or an unwritable target exits 6 rather than
+leaving a file that was never written.
 
 ## Remote bench (device-connect, Stage 2)
 
