@@ -387,13 +387,29 @@ class TestAuditFixes:
     """2026-09-28 audit-round fixes, each pinned."""
 
     def test_backslash_cannot_invert_escapes(self):
-        # odd backslash prefixes used to invert the following escape and
-        # revive clickable links / raw HTML (N2/N3 audit finding)
+        # the core N2/N3 vector: a value with backslash-prefixed brackets
+        # ("\[x\]") passed to md_cell. With the backslash doubling in
+        # place, EVERY bracket in the output stays escaped (odd number of
+        # leading backslashes); without it, a prefix inverts the next
+        # escape and a live "[x](...)" link revives. Character-walk, not
+        # substring checks — the old guard's substring assertions passed
+        # even with the doubling reverted (glm3 v3 audit, high).
         from flashgate.mdsafe import md_cell
-        out = md_cell("\[x\](http://evil)")
-        assert "<" not in out and ">" not in out
-        # no live link survives: any [x] must remain escaped
-        assert "[x](http://evil)" not in out.replace("\[x\]", "")
+
+        def bare_brackets(text):
+            found, i = [], 0
+            while i < len(text):
+                if text[i] == "\\":
+                    i += 2                     # skip the escape pair
+                else:
+                    if text[i] in "[]<>|":
+                        found.append((i, text[i]))
+                    i += 1
+            return found
+
+        out = md_cell("\\[x\\](http://evil)")
+        assert bare_brackets(out) == [], f"bare syntax chars: {bare_brackets(out)}"
+        assert "[x](http://evil)" not in out
 
     def test_probes_array_goes_through_md_cell(self):
         # run.probes was the one field rendered raw — a probe name like
