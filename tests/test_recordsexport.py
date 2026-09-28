@@ -410,20 +410,43 @@ class TestAuditFixes:
         assert "[x](http://evil)" not in md
 
     def test_export_write_is_atomic(self, tmp_path, monkeypatch):
-        # a crash between write and rename must not leave a truncated
-        # export at the target path (audit finding)
+        # true atomicity: the failure point is BETWEEN the tmp write and
+        # the rename — the target must never exist in a truncated state,
+        # and the tmp file must be the one holding the content
+        # (step-3.7 v2 audit: the old guard failed before any write, so
+        # both direct-write and atomic implementations passed it)
+        import os
+        from pathlib import Path as _P
         from flashgate import recordsexport as rex
-        writes = []
-        real_write = type(tmp_path).write_text
+        state = {"replace_called": False, "src_had_content": False}
 
-        def exploding(self, *a, **kw):
-            writes.append(self)
-            raise OSError("disk full mid-write")
-        monkeypatch.setattr(type(tmp_path), "write_text", exploding)
+        def exploding_replace(src, dst, *a, **kw):
+            state["replace_called"] = True
+            state["src_had_content"] = _P(str(src)).stat().st_size > 0
+            raise OSError("crash between write and rename")
+        monkeypatch.setattr(os, "replace", exploding_replace)
+        # the fw dir needs at least one real record, or select_records
+        # raises before any write happens (the guard's own round-trip:
+        # a nonexistent kwarg and then an empty dir both swallowed it)
+        fw = tmp_path / "fw"
+        fw.mkdir()
+        (fw / ".flashgate" / "records").mkdir(parents=True)
+        (fw / ".flashgate" / "records" / "r.json").write_text(
+            json.dumps({"run": {"exit_code": 0, "status": "succeeded",
+                                "summary": "s"},
+                        "checks": [], "board": {}, "tool": {},
+                        "evidence": []}),
+            encoding="utf-8")
         target = tmp_path / "out.md"
-        with pytest.raises(Exception):
-            rex.export_records(tmp_path, target, latest=True, redact=False)
+        with pytest.raises(Exception) as ei:
+            rex.export_records(fw, target, all_records=False,
+                               redact=False)
+        assert state["replace_called"], (
+            f"atomic path must attempt os.replace (got {type(ei.value).__name__}: "
+            f"{str(ei.value)[:60]})")
         monkeypatch.undo()
-        assert not target.exists(), "target must stay clean on failure"
-        assert any(p.name.endswith(".tmp") for p in tmp_path.iterdir()) or \
-            not list(tmp_path.iterdir())
+        assert state["src_had_content"], "tmp carries the full export"
+        assert not target.exists(), \
+            "a crashed rename must leave no truncated target"
+        # the tmp remnant is acceptable (documented crash semantics); the
+        # target itself must not exist
