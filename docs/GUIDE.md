@@ -1160,7 +1160,7 @@ Windows 设备名）会以 exit 6 结束并说明原因，不会留一个"以为
 工时的度量（复用度 ≥80% 才算模板成立）。`coverage.notes`（体检与
 记录里的检查范围声明）与本矩阵的 `coverage_caveats` 保持同步。
 
-schema 校验与交叉核对（对板卡档案、对最近验证记录）由
+schema 校验与交叉核对（对板卡档案；本机最近一次验证记录仅在台架上核验——records 不入 git，纯 checkout 上跳过）由
 `tests/test_compat.py` 守卫。
 
 ## 13. 远程台架（bench-serve）

@@ -49,7 +49,7 @@ matrix:
   # ── 主机系统 ──────────────────────────────────────────────────
   hosts:
     # 每个实测过的主机环境一行；未实测的环境写 status: untested
-    - os: "<Windows 11 23H2>"
+    - os: "<Windows 版本，如 Windows 11 25H2>"
       python: "<3.11.x>"
       python_packages: "<pip freeze 关键项：pyserial/PyYAML 版本>"
       openocd: "<版本或 untested>"

@@ -15,6 +15,8 @@ from pathlib import Path
 
 import yaml
 
+import json
+
 import pytest
 
 DOCS = Path(__file__).resolve().parent.parent / "docs"
@@ -98,3 +100,20 @@ class TestApolloExample:
             assert any(note[:30] == c[:30] for c in m["coverage_caveats"]), \
                 f"profile coverage note missing from matrix: {note[:40]}"
 
+
+
+def test_last_verify_record_local_on_bench(tmp_path):
+    # audit H-2: the ORIGINAL H1 fix was "rename to _local + skip on
+    # pure checkouts", but the landed patch DELETED the test instead —
+    # the declared protection did not exist. Restored: on a bench with
+    # records, the pinned file must exist and be a green run; on a pure
+    # checkout it skips rather than fails (records are gitignored).
+    from pathlib import Path
+
+    m = _load(APOLLO)
+    rec = (DOCS.parent / m["records_dir"]
+           / m["last_verify_record_local"])
+    if not rec.is_file():
+        pytest.skip("no local records (pure checkout) — run verify")
+    data = json.loads(rec.read_text(encoding="utf-8"))
+    assert data["run"]["exit_code"] == 0,         "the pinned last_verify_record_local must be a green run"
