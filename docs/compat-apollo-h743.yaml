@@ -40,8 +40,8 @@ matrix:
     entry_point_notes: "签名发布在 main.c 启动序列（bsp_signature_publish，一次）"
 
   hosts:
-    - os: Windows 11 23H2
-      python: 3.11.x
+    - os: "Windows 11 25H2 (build 26200)"
+      python: 3.11.0
       python_packages: pyserial>=3.5, PyYAML>=6.0
       openocd: xpack 0.12.0-7（OPENOCD_BIN 指向）
       notes: 本仓库的主开发/验证环境
