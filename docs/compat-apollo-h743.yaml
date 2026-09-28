@@ -1,6 +1,7 @@
 # flashgate 兼容矩阵 · 正点原子 Apollo STM32H743IIT6（N4 示例实填）
 #
-# 本表随板卡包分发；每个字段都在真机上实测过或显式标注 untested。
+# 本表随板卡包分发；字段状态分三档：真机实测（附日期与证据
+# 出处）/ 显式标注 untested / 仓库外证据（注明复核方式）。
 # 复用度量：接入第二块板时逐格对照本表，可复用条目 ÷ 总条目 ≥80% 为达标。
 
 matrix:
@@ -8,7 +9,7 @@ matrix:
   mcu: STM32H743IIT6
   hardware_revisions:
     - revision: ALIENTEK 阿波罗核心板（2024 批次）
-      verified: 2026-09-28
+      verified: "2026-09-28"
       notes: 底板 USART1 PA9/PA10 引到排针；无其他修订实测
   unverified_revisions:
     - "早期批次（2022 前）：供电电路差异未核实"
@@ -17,11 +18,11 @@ matrix:
     adapters:
       - adapter: cubeprogrammer
         version: 2.23.0
-        verified: 2026-09-28
+        verified: "2026-09-28"
       - adapter: openocd
         version: xpack 0.12.0-7
-        verified: 2026-09-28
-    probe: ST-Link V2（固件 V2J48S7）
+        verified: "2026-09-28"
+    probe: "ST-Link V2（固件 V2J48S7——出处同上：ST-Link shell，record 无此字段）"
     connect: port=SWD
     address: "0x08000000"
 
@@ -63,18 +64,19 @@ matrix:
     - name: identity
       proves: 板上运行的固件 git sha 与当前工作树一致
       failure_boundary: 不证明工作树中未提交改动的功能正确性
+    - name: doctor
+      proves: 台架环境就绪（后端/探针/串口/工具链/板上签名，可导出体检单）
+      failure_boundary: 体检单结论只覆盖检查项，不代表固件功能验证
     - name: signature-wipe
-      proves: 每次验证的启动身份新鲜（擦除+回读确认）
+      proves: 每次验证的启动身份新鲜（擦除+回读确认；证据=历史 swd 模式
+        record，如 20260917T083714433-0-19eac6b5）
       failure_boundary: 不证明擦除对断电重启的持久性
     - name: probe:led-demo
       proves: LED 状态机接受命令并回读；TIM3 CCR 寄存器读回在断言范围
       failure_boundary: 不证明 LED 物理发光可见（软件观察，非独立测量）
-    - name: probe:console-echo
-      proves: 控制台回显链路双向可用
-      failure_boundary: 不证明高波特率下的长时稳定性
   coverage_caveats:
     - "LED visibility to the eye is not independently observed; the probe asserts the firmware state machine and the TIM3 CCR register only"
     - "single board, single bench, single toolchain version; no revision or environment spread"
 
   records_dir: examples/apollo-h743/.flashgate/records
-  last_verify_record: 20260928T054250348-0-fb519021.json
+  last_verify_record_local: 20260928T054250348-0-fb519021.json

@@ -24,7 +24,7 @@ APOLLO = DOCS / "compat-apollo-h743.yaml"
 _REQUIRED = {
     "board", "mcu", "hardware_revisions", "unverified_revisions",
     "flash", "console", "firmware", "hosts", "checks",
-    "coverage_caveats", "records_dir",
+    "coverage_caveats", "records_dir", "last_verify_record_local",
 }
 _FLASH_REQUIRED = {"adapters", "probe", "connect", "address"}
 _HOST_REQUIRED = {"os"}                    # status: untested also allowed
@@ -98,8 +98,3 @@ class TestApolloExample:
             assert any(note[:30] == c[:30] for c in m["coverage_caveats"]), \
                 f"profile coverage note missing from matrix: {note[:40]}"
 
-    def test_last_verify_record_exists(self):
-        m = _load(APOLLO)
-        rec = (DOCS.parent / m["records_dir"] / m["last_verify_record"])
-        assert rec.is_file(), \
-            f"last_verify_record {m['last_verify_record']} not on disk"

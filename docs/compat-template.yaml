@@ -69,4 +69,5 @@ matrix:
 
   # ── 记录与追溯 ────────────────────────────────────────────────
   records_dir: "<固件目录/.flashgate/records>"
-  last_verify_record: "<最近一次真机验证的 record 文件名>"
+  last_verify_record_local: "<本机最近一次真机验证的 record 文件名；
+    注意 records 不入 git——纯 checkout 上此项无法核验，跳过而非失败>"
