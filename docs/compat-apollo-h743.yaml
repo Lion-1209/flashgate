@@ -22,6 +22,8 @@ matrix:
       - adapter: openocd
         version: xpack 0.12.0-7
         verified: "2026-09-28"
+        evidence: "手动 doctor 会话（OPENOCD_BIN 指向真实 openocd，probe
+          detected + 读到 RAM 签名）——record 不记录 adapter，证据在仓库外"
     probe: "ST-Link V2（固件 V2J48S7——出处同上：ST-Link shell，record 无此字段）"
     connect: port=SWD
     address: "0x08000000"
@@ -69,7 +71,7 @@ matrix:
       failure_boundary: 体检单结论只覆盖检查项，不代表固件功能验证
     - name: signature-wipe
       proves: 每次验证的启动身份新鲜（擦除+回读确认；证据=历史 swd 模式
-        record，如 20260917T083714433-0-19eac6b5）
+        record 20260921T083714433-0-19eac6b5，rc=0 mode=swd）
       failure_boundary: 不证明擦除对断电重启的持久性
     - name: probe:led-demo
       proves: LED 状态机接受命令并回读；TIM3 CCR 寄存器读回在断言范围
