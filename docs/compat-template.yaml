@@ -1,0 +1,72 @@
+# flashgate 板卡兼容矩阵模板（N4）
+#
+# 一板一份，随板卡包分发。它回答两个问题：
+#   1. "这份 PASS 在什么范围内有效"——硬件修订/工具版本/环境组合每换一格
+#      就是一份新的验收责任（T1 红线的矩阵化）。
+#   2. "支持一块新板要花多少工时"——第二块板接入时逐格对照本表，
+#      可直接复用的条目数 ÷ 总条目数 = 复用度（决策门槛：≥80%）。
+#
+# 字段约定见每行注释；<角度括号> 为占位符。schema 校验：
+#   python -m pytest tests/test_compat.py
+
+matrix:
+  # ── 硬件 ────────────────────────────────────────────────────────
+  board: "<板卡名，须与板卡档案的 board 字段一致>"
+  mcu: "<具体型号，如 STM32H743IIT6>"
+  hardware_revisions:
+    # 每个实测过的硬件修订版一行
+    - revision: "<板卡丝印/修订号>"
+      verified: "<YYYY-MM-DD，该修订版最后一次真机验证日期>"
+      notes: "<修订差异，如供电/引脚变化>"
+  unverified_revisions: []     # 已知存在但未实测的修订版（诚实边界）
+
+  # ── 调试探针与烧录 ─────────────────────────────────────────────
+  flash:
+    adapters:
+      # 每个实测过的 adapter 一行（未实测的不要列出）
+      - adapter: "<cubeprogrammer 或 openocd>"
+        version: "<工具版本>"
+        verified: "<YYYY-MM-DD>"
+    probe: "<ST-Link V2 / V3 / J-Link…，注明固件版本>"
+    connect: "<板卡档案 flash.connect 的值，如 port=SWD>"
+    address: "<烧录地址，如 0x08000000>"
+
+  # ── 串口控制台 ────────────────────────────────────────────────
+  console:
+    usb_adapter: "<USB-TTL 芯片，如 CH340/CP210x/FT232>"
+    vid_pid: "<USB VID:PID 探测提示，如 0x1A86:0x7523>"
+    baudrate: 115200
+    wiring: "<TX/RX/GND 接法；常见错接一句话>"
+
+  # ── 固件框架与构建 ────────────────────────────────────────────
+  firmware:
+    framework: "<裸机/FreeRTOS/RT-Thread…，与版本>"
+    sdk_version: "<CubeMX/SDK 包版本>"
+    toolchain: "<arm-none-eabi-gcc 版本>"
+    build_system: "<CMake+Ninja / Make…>"
+    entry_point_notes: "<banner/签名的发布调用点，如 main.c:100>"
+
+  # ── 主机系统 ──────────────────────────────────────────────────
+  hosts:
+    # 每个实测过的主机环境一行；未实测的环境写 status: untested
+    - os: "<Windows 11 23H2>"
+      python: "<3.11.x>"
+      python_packages: "<pip freeze 关键项：pyserial/PyYAML 版本>"
+      openocd: "<版本或 untested>"
+      notes: "<该主机的已知差异>"
+    # - os: "<Ubuntu 24.04>"
+    #   status: untested
+
+  # ── 验收检查项与失效边界 ──────────────────────────────────────
+  checks:
+    # 8—12 项；每项写清失效边界（ proves / failure_boundary 必填）
+    - name: "<检查名，与板卡档案探针名对应>"
+      proves: "<该检查通过证明了什么>"
+      failure_boundary: "<什么情况下它会失败/它不能证明什么>"
+  coverage_caveats:
+    # 与板卡档案 coverage.notes 同步
+    - "<本板 PASS 不覆盖的物理效果/环境条件>"
+
+  # ── 记录与追溯 ────────────────────────────────────────────────
+  records_dir: "<固件目录/.flashgate/records>"
+  last_verify_record: "<最近一次真机验证的 record 文件名>"

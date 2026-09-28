@@ -1146,6 +1146,23 @@ Windows 设备名）会以 exit 6 结束并说明原因，不会留一个"以为
 导出位置同样提醒：**写到固件仓库外面**，否则未跟踪文件会改变树指纹，
 让 Stop hook 缓存的那次 PASS 失效。
 
+## 12.1 板卡兼容矩阵（N4）
+
+一块板的 PASS 在什么范围内有效，由兼容矩阵回答：硬件修订版、调试
+探针与烧录方式、串口接线、固件框架与工具版本、主机系统、验收检查
+项及其失效边界。模板在 [compat-template.yaml](compat-template.yaml)，
+正点原子 Apollo 的实填示例在
+[compat-apollo-h743.yaml](compat-apollo-h743.yaml)——每个字段都在
+真机上实测过，未实测的环境显式写 `status: untested`。
+
+两件事靠它：向客户交付时，矩阵就是"长期责任具体到什么范围"的合同
+附件；接入第二块板时，逐格对照旧表，可直接复用的条目占比就是适配
+工时的度量（复用度 ≥80% 才算模板成立）。`coverage.notes`（体检与
+记录里的检查范围声明）与本矩阵的 `coverage_caveats` 保持同步。
+
+schema 校验与交叉核对（对板卡档案、对最近验证记录）由
+`tests/test_compat.py` 守卫。
+
 ## 13. 远程台架（bench-serve）
 
 装可选 extra 后，`bench-serve` 子命令把整台实验台变成局域网上的

@@ -1,0 +1,80 @@
+# flashgate 兼容矩阵 · 正点原子 Apollo STM32H743IIT6（N4 示例实填）
+#
+# 本表随板卡包分发；每个字段都在真机上实测过或显式标注 untested。
+# 复用度量：接入第二块板时逐格对照本表，可复用条目 ÷ 总条目 ≥80% 为达标。
+
+matrix:
+  board: apollo-h743
+  mcu: STM32H743IIT6
+  hardware_revisions:
+    - revision: ALIENTEK 阿波罗核心板（2024 批次）
+      verified: 2026-09-28
+      notes: 底板 USART1 PA9/PA10 引到排针；无其他修订实测
+  unverified_revisions:
+    - "早期批次（2022 前）：供电电路差异未核实"
+
+  flash:
+    adapters:
+      - adapter: cubeprogrammer
+        version: 2.23.0
+        verified: 2026-09-28
+      - adapter: openocd
+        version: xpack 0.12.0-7
+        verified: 2026-09-28
+    probe: ST-Link V2（固件 V2J48S7）
+    connect: port=SWD
+    address: "0x08000000"
+
+  console:
+    usb_adapter: CH340（亦实测 CP210x 类适配器可枚举）
+    vid_pid: "0x1A86:0x7523"
+    baudrate: 115200
+    wiring: "适配器 TX→PA10、RX→PA9、GND 共地；TX/RX 互换是第一排查项"
+
+  firmware:
+    framework: FreeRTOS（CubeMX 生成）
+    sdk_version: STM32CubeH7（2026-09 构建链）
+    toolchain: arm-none-eabi-gcc 14.3.1+st.2
+    build_system: CMake + Ninja（ST bundle）
+    entry_point_notes: "签名发布在 main.c 启动序列（bsp_signature_publish，一次）"
+
+  hosts:
+    - os: Windows 11 23H2
+      python: 3.11.x
+      python_packages: pyserial>=3.5, PyYAML>=6.0
+      openocd: xpack 0.12.0-7（OPENOCD_BIN 指向）
+      notes: 本仓库的主开发/验证环境
+    - os: Linux（树莓派 OS）
+      status: untested           # L3 待硬件；完成后此行升为实测
+
+  checks:
+    - name: console
+      proves: 控制台串口可解析、可打开（首次验收的物理连接证明）
+      failure_boundary: 不证明波特率之外的链路质量
+    - name: build
+      proves: 当前工作树可无警告编译出产物
+      failure_boundary: 不证明编译警告为零的历史、不证明链接期未触发的问题
+    - name: flash
+      proves: 产物写入指定地址并被工具回读确认
+      failure_boundary: 不证明写入后断电保存的持久性
+    - name: boot
+      proves: 板子启动并发布启动证据（banner/RAM 签名）
+      failure_boundary: 不证明 FreeRTOS 任务调度无饿死
+    - name: identity
+      proves: 板上运行的固件 git sha 与当前工作树一致
+      failure_boundary: 不证明工作树中未提交改动的功能正确性
+    - name: signature-wipe
+      proves: 每次验证的启动身份新鲜（擦除+回读确认）
+      failure_boundary: 不证明擦除对断电重启的持久性
+    - name: probe:led-demo
+      proves: LED 状态机接受命令并回读；TIM3 CCR 寄存器读回在断言范围
+      failure_boundary: 不证明 LED 物理发光可见（软件观察，非独立测量）
+    - name: probe:console-echo
+      proves: 控制台回显链路双向可用
+      failure_boundary: 不证明高波特率下的长时稳定性
+  coverage_caveats:
+    - "LED visibility to the eye is not independently observed; the probe asserts the firmware state machine and the TIM3 CCR register only"
+    - "single board, single bench, single toolchain version; no revision or environment spread"
+
+  records_dir: examples/apollo-h743/.flashgate/records
+  last_verify_record: 20260928T054250348-0-fb519021.json
