@@ -22,6 +22,7 @@ empty file.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -177,7 +178,7 @@ def _record_section(record: dict, index: int, total: int) -> list[str]:
                      f"(python {md_cell(tool.get('python', '?'))}, "
                      f"{md_cell(tool.get('platform', '?'))})")
     probes = run.get("probes")
-    probes_text = ("、".join(str(p) for p in probes)
+    probes_text = ("、".join(md_cell(p) for p in probes)
                    if isinstance(probes, list) and probes
                    else "(none)")
     lines.append(f"- 运行：mode={md_cell(run.get('mode', '?'))} "
@@ -287,7 +288,11 @@ def export_records(fw_dir: Path, path: Path, all_records: bool = False,
     text = (render_json(bundle) if path.suffix.lower() == ".json"
             else render_markdown(bundle))
     try:
-        path.write_text(text, encoding="utf-8")
+        # atomic write: a crash or concurrent writer must not leave a
+        # truncated export at the target path (audit finding)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
         size = path.stat().st_size if path.is_file() else 0
     except OSError as exc:
         raise ExportError(f"{path}: {exc}") from exc

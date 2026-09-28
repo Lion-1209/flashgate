@@ -381,3 +381,49 @@ class TestCli:
                        "--export", "NUL"])
         assert rc == cli.EXIT_ENV
         assert "could not export" in capsys.readouterr().out
+
+
+class TestAuditFixes:
+    """2026-09-28 audit-round fixes, each pinned."""
+
+    def test_backslash_cannot_invert_escapes(self):
+        # odd backslash prefixes used to invert the following escape and
+        # revive clickable links / raw HTML (N2/N3 audit finding)
+        from flashgate.mdsafe import md_cell
+        out = md_cell("\[x\](http://evil)")
+        assert "<" not in out and ">" not in out
+        # no live link survives: any [x] must remain escaped
+        assert "[x](http://evil)" not in out.replace("\[x\]", "")
+
+    def test_probes_array_goes_through_md_cell(self):
+        # run.probes was the one field rendered raw — a probe name like
+        # "[x](http://evil)" used to become a clickable link (audit M)
+        from flashgate import recordsexport as rex
+        rec = {"run": {"mode": "uart", "exit_code": 0,
+                       "probes": ["[x](http://evil)"],
+                       "duration_ms": 10},
+               "checks": [], "board": {"name": "b", "mcu": "m"}}
+        md = rex.render_markdown({"records": [rec], "export": {
+            "generated_at": "t", "version": "v", "selector": "latest",
+            "fw_dir": "d", "redacted": False, "record_count": 1,
+            "unreadable": []}})
+        assert "[x](http://evil)" not in md
+
+    def test_export_write_is_atomic(self, tmp_path, monkeypatch):
+        # a crash between write and rename must not leave a truncated
+        # export at the target path (audit finding)
+        from flashgate import recordsexport as rex
+        writes = []
+        real_write = type(tmp_path).write_text
+
+        def exploding(self, *a, **kw):
+            writes.append(self)
+            raise OSError("disk full mid-write")
+        monkeypatch.setattr(type(tmp_path), "write_text", exploding)
+        target = tmp_path / "out.md"
+        with pytest.raises(Exception):
+            rex.export_records(tmp_path, target, latest=True, redact=False)
+        monkeypatch.undo()
+        assert not target.exists(), "target must stay clean on failure"
+        assert any(p.name.endswith(".tmp") for p in tmp_path.iterdir()) or \
+            not list(tmp_path.iterdir())

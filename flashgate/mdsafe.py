@@ -17,7 +17,9 @@ from __future__ import annotations
 # brackets are invalid in Windows filenames but perfectly legal in a
 # board-profile string or in a signature field decoded from firmware RAM
 # (errors="replace"), which is exactly where hostile values come from.
-_ESCAPED = ("|", "[", "]", "<", ">")
+# Backslash first: a raw "\[" would undo the "[" escape that follows
+# (odd backslash prefixes invert later escapes — audit N2/N3 finding).
+_ESCAPED = ("\\", "|", "[", "]", "<", ">")
 
 
 def md_cell(text: object) -> str:
