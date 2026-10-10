@@ -12,6 +12,7 @@ license = { text = "MIT" }
 dependencies = [
     "pyserial>=3.5",
     "PyYAML>=6.0",
+    "mcp>=1.2,<3",
 ]
 
 [project.urls]
@@ -20,7 +21,6 @@ Repository = "https://github.com/Lion-1209/flashgate"
 Issues = "https://github.com/Lion-1209/flashgate/issues"
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.2,<3"]
 bench = ["device-connect-edge>=0.2.5,<0.3"]
 dev = ["pytest>=8"]
 

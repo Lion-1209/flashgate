@@ -44,7 +44,7 @@ matrix:
   hosts:
     - os: "Windows 11 25H2 (build 26200)"
       python: 3.11.0
-      python_packages: pyserial>=3.5, PyYAML>=6.0
+      python_packages: pyserial>=3.5, PyYAML>=6.0, mcp>=1.2
       openocd: xpack 0.12.0-7（OPENOCD_BIN 指向）
       notes: 本仓库的主开发/验证环境
     - os: Linux（树莓派 OS）

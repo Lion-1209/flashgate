@@ -67,7 +67,7 @@ including register readbacks (TIM3 CCR), not firmware self-reports:
 
 ```bash
 pip install -e .                 # Python 3.11+
-pip install -e ".[mcp]"          # optional MCP server
+pip install -e "."                # MCP server included since 0.10.0
 pip install -e ".[bench]"        # optional remote bench (device-connect)
 
 flashgate doctor                 # ST-Link / serial / toolchain sanity
@@ -239,7 +239,7 @@ a board-integration skill and /flashgate commands, all at once:
 
 ```
 pip install git+https://github.com/Lion-1209/flashgate        # CLI + hook runtime
-pip install "flashgate[mcp] @ git+https://github.com/Lion-1209/flashgate"  # + MCP
+pip install "flashgate @ git+https://github.com/Lion-1209/flashgate"        # MCP included
 ```
 
 Then inside Claude Code:
@@ -340,7 +340,7 @@ flashgate 回答一个很具体的问题：刚编译出来的固件，烧到板�
   就能跑通第一次验证
 
 ```bash
-pip install -e ".[mcp]"
+pip install -e "."
 flashgate doctor                  # 体检
 flashgate doctor --export checkup.md --redact   # 可发送的体检单（脱敏）
 flashgate verify --all-probes     # 完整验证

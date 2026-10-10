@@ -73,7 +73,7 @@ pip install -e .
 想用 MCP server 的话装可选依赖：
 
 ```powershell
-pip install -e ".[mcp]"
+pip install -e "."
 ```
 
 工具链有三种来路，flashgate 按这个顺序找：
