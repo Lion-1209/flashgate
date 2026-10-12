@@ -1,12 +1,29 @@
-# Glama registry build/check image: the MCP server must start and answer
-# MCP introspection. It does NOT need hardware for that — tools only touch
-# serial/ST-Link when actually called.
+# flashgate MCP server — registry build/introspection image.
+#
+# The registry (Glama) clones the repo, builds this Dockerfile in a
+# sandbox, runs the image with `docker run -i`, and speaks MCP over
+# stdio: initialize + tools/list must work WITHOUT any hardware or
+# board profile (board_info reports honestly without one; hardware
+# tools name their prerequisites when called).
+#
+# The install is pinned to the committed uv.lock (--frozen), so the
+# image reproduces exactly what `uv sync` gives a local developer —
+# mcp included (core dependency since 0.10.0).
 FROM python:3.12-slim
 
-# serial/ST-Link tools are optional at runtime (only flash/verify touch
-# them); declared so the registry build logs show what is available.
-RUN pip install --no-cache-dir "flashgate==0.10.0"
+# stdio JSON-RPC must not sit in a block buffer: registry clients read
+# `docker run -i` stdout through a pipe (non-TTY), and an unflushed
+# initialize response reads as a hang.
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
-# The registry's introspection runs `docker run -i <image>` and speaks
-# MCP over stdio: no arguments, no board, foreground process.
+WORKDIR /app
+
+COPY . .
+
+RUN pip install --no-cache-dir uv \
+    && uv sync --frozen
+
+ENV PATH="/app/.venv/bin:$PATH"
+
 CMD ["flashgate-mcp"]

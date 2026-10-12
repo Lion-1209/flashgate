@@ -1,0 +1,16 @@
+# build context hygiene: the registry clones the repo and builds THIS
+# Dockerfile with the working tree as context — keep the image small
+# and free of local state.
+.git
+.github
+.vscode
+audit
+**/__pycache__
+**/*.egg-info
+.venv
+build
+dist
+examples/apollo-h743/build
+examples/apollo-h743/.flashgate
+examples/apollo-h743/.settings
+**/NUL.tmp
